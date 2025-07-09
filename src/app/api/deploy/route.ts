@@ -4,7 +4,6 @@ import { generateTemplate } from '@/utils/aiClient'
 import { deployOnVercel } from '@/utils/vercelDeploy'
 import { captureThumbnail } from '@/utils/thumbnail'
 import { sendImageMessage, sendTextMessage } from '@/utils/whatsapp'
-import { RequestType } from '@/types/types'
 
 interface RequestBody {
   id: string
@@ -12,101 +11,102 @@ interface RequestBody {
 
 export async function POST(request: Request) {
   try {
-    // Extrair id do corpo da requisição com tipagem segura
-    const requestBody: RequestBody = await request.json()
-    const { id } = requestBody
+    const { id } = (await request.json()) as RequestBody
+    console.log('📥 Deploy request for ID:', id)
 
     if (!id) {
-      return NextResponse.json(
-        { error: 'ID is required' },
-        { status: 400 }
-      )
+      console.warn('⚠️ ID is required')
+      return NextResponse.json({ error: 'ID is required' }, { status: 400 })
     }
 
-    // Buscar pedido no Supabase com tipagem explícita
+    // Buscar pedido
     const { data: siteRequest, error: fetchError } = await supabase
       .from('requests')
       .select('*')
       .eq('id', id)
       .single()
 
-    if (!siteRequest || fetchError) {
-      return NextResponse.json(
-        { error: 'Request not found' },
-        { status: 404 }
-      )
+    if (fetchError || !siteRequest) {
+      console.error('❌ Request not found:', fetchError)
+      return NextResponse.json({ error: 'Request not found' }, { status: 404 })
     }
 
-    // Gerar código com IA
+    console.log('📝 Prompt do usuário:', siteRequest.prompt)
+
+    // Gerar código
     const templateCode = await generateTemplate(siteRequest.prompt)
-    
-    // Fazer deploy na Vercel
-    const vercelUrl = await deployOnVercel(templateCode)
-    
+    console.log('🧠 Template gerado, tamanho:', templateCode.length)
+
+    // Deploy na Vercel (reaproveita project_id se existir)
+    const { url: vercelUrl, projectId } = await deployOnVercel(
+      templateCode,
+      (siteRequest as any).project_id // assumindo que você adicionou a coluna project_id
+    )
+
     // Gerar thumbnail
     const thumbnailUrl = await captureThumbnail(vercelUrl)
-    
-    // Atualizar registro
+    console.log('📸 Thumbnail criada:', thumbnailUrl)
+
+    // Atualizar registro no Supabase
     const { error: updateError } = await supabase
       .from('requests')
       .update({
         status: 'completed',
         vercel_url: vercelUrl,
         thumbnail_url: thumbnailUrl,
+        project_id: projectId,
         updated_at: new Date().toISOString()
       })
       .eq('id', id)
 
-    if (updateError) throw updateError
+    if (updateError) {
+      console.error('❌ Erro ao atualizar registro:', updateError)
+      throw updateError
+    }
 
-    // Enviar resultado via WhatsApp
+    console.log('✅ Registro atualizado, enviando mensagens...')
+
+    // Enviar resultado
     await sendImageMessage(siteRequest.user_phone, thumbnailUrl)
     await sendTextMessage(
-      siteRequest.user_phone, 
+      siteRequest.user_phone,
       `✅ Seu site está pronto!\n\n🌐 Acesse: ${vercelUrl}\n\n⚠️ Link válido por 24 horas!`
     )
 
     return NextResponse.json({ success: true })
-
   } catch (error: unknown) {
-    console.error('Deploy error:', error)
-    
-    // Extrair id do erro de forma segura
+    console.error('🔥 Deploy error:', error)
+
+    // Tentar extrair ID para marcar falha
     let requestId: string | undefined
     try {
-      const errorBody = await request.json()
-      requestId = errorBody.id
-    } catch (e) {
-      console.error('Failed to parse error request:', e)
+      const body = await request.json()
+      requestId = (body as RequestBody).id
+    } catch {
+      console.error('❌ Failed to parse error request body')
     }
 
     if (requestId) {
-      // Atualizar status de erro
-      await supabase
-        .from('requests')
-        .update({ status: 'failed' })
-        .eq('id', requestId)
+      console.log('⚠️ Marcando request como failed:', requestId)
+      await supabase.from('requests').update({ status: 'failed' }).eq('id', requestId)
 
       // Notificar usuário
-      const { data: failedRequest } = await supabase
+      const { data: failedReq } = await supabase
         .from('requests')
         .select('user_phone')
         .eq('id', requestId)
         .single()
 
-      if (failedRequest?.user_phone) {
+      if (failedReq?.user_phone) {
         await sendTextMessage(
-          failedRequest.user_phone, 
-          "❌ Ocorreu um erro ao gerar seu site. Estamos melhorando nosso sistema!"
+          failedReq.user_phone,
+          '❌ Ocorreu um erro ao gerar seu site. Estamos melhorando nosso sistema!'
         )
       }
     }
 
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    )
+    const msg = error instanceof Error ? error.message : 'Unknown error'
+    return NextResponse.json({ error: msg }, { status: 500 })
   }
 }
 
