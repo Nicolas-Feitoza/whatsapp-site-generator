@@ -25,8 +25,11 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
+    console.log('📥 Webhook body recebido:', JSON.stringify(body, null, 2))
+
     const entry = body.entry?.[0]
     if (!entry) {
+      console.warn('⚠️ Entrada ausente no body:', JSON.stringify(body))
       return NextResponse.json(
         { error: "Invalid request format" },
         { status: 400 }
@@ -37,6 +40,7 @@ export async function POST(request: Request) {
     const message = change?.value?.messages?.[0]
     
     if (!message) {
+      console.warn('⚠️ Nenhuma mensagem encontrada:', JSON.stringify(change))
       return NextResponse.json(
         { error: "No message found" },
         { status: 400 }
@@ -46,15 +50,18 @@ export async function POST(request: Request) {
     const userPhone = message.from
     const userPrompt = message.text?.body
 
+    console.log(`📲 Mensagem recebida de ${userPhone}: "${userPrompt}"`)
+
     if (!userPrompt) {
+      console.warn('⚠️ Mensagem sem texto:', JSON.stringify(message))
       return NextResponse.json(
         { error: "No text in message" },
         { status: 400 }
       )
     }
 
-    // Validar se é uma solicitação de site
     if (!isValidSiteRequest(userPrompt)) {
+      console.log(`❌ Solicitação inválida de ${userPhone}: "${userPrompt}"`)
       await sendTextMessage(userPhone, "❌ Eu só posso criar sites! Tente algo como:\n\"Quero um site para minha loja de roupas\"\n\"Preciso de um portfolio profissional\"")
       return NextResponse.json(
         { error: "Invalid request type" },
@@ -62,7 +69,7 @@ export async function POST(request: Request) {
       )
     }
 
-    // Salvar no Supabase
+    console.log('💾 Salvando solicitação no Supabase...')
     const { data, error } = await supabase
       .from('requests')
       .insert([{
@@ -73,24 +80,29 @@ export async function POST(request: Request) {
       .select()
       .single()
 
-    if (error) throw error
+    if (error) {
+      console.error('❌ Erro ao salvar no Supabase:', error)
+      throw error
+    }
 
-    // Responder imediatamente
+    console.log('✅ Solicitação salva com ID:', data.id)
+
     await sendTextMessage(userPhone, "⌛ Gerando seu site profissional... Isso pode levar até 1 minuto!")
     
-    // Iniciar processamento assíncrono
+    console.log('🚀 Iniciando processamento assíncrono...')
     processRequestAsync(data.id)
 
     return NextResponse.json({ status: 'processing' })
 
   } catch (error) {
-    console.error('Webhook error:', error)
+    console.error('🔥 Webhook error:', error instanceof Error ? error.message : JSON.stringify(error))
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
     )
   }
 }
+
 
 function isValidSiteRequest(prompt: string): boolean {
   const keywords = ["site", "página", "web", "landing page", "portfolio", "loja online", "e-commerce"]
