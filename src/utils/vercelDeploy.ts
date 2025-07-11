@@ -23,15 +23,14 @@ export const deployOnVercel = async (
         },
         body: JSON.stringify({
           name: `temp-site-${Date.now()}`,
-          framework: 'static'
-        })
-      })
+        }),
+      });
       const projectData = await projectResponse.json()
       if (!projectResponse.ok) {
         console.error('❌ Erro criando projeto Vercel:', projectData)
         throw projectData
-      }
-      projectId = projectData.id
+      };
+      projectId = projectData.id;
       console.log('✅ Projeto criado com ID:', projectId)
     } else {
       console.log('🔄 Reaproveitando projeto existente:', projectId)
@@ -43,7 +42,7 @@ export const deployOnVercel = async (
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.VERCEL_TOKEN}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         name: `temp-site-${Date.now()}`,
@@ -51,27 +50,27 @@ export const deployOnVercel = async (
         files: [
           {
             file: '/index.html',
-            data: Buffer.from(htmlContent).toString('base64')
-          }
+            data: Buffer.from(htmlContent).toString('base64'),
+          },
         ],
         projectSettings: { framework: null }
       })
-    })
-    const deploymentData: VercelDeployment = await deploymentResponse.json()
+    });
+    const deploymentData: VercelDeployment = await deploymentResponse.json();
     if (!deploymentResponse.ok) {
-      console.error('❌ Erro no deployment Vercel:', deploymentData)
-      throw deploymentData
-    }
+      console.error('❌ Erro no deployment Vercel:', deploymentData);
+      throw deploymentData;
+    };
     if (!projectId) {
-      throw new Error('Project ID is undefined')
-    }
+      throw new Error('Project ID is undefined');
+    };
     
-    const url = `https://${deploymentData.url}`
-    console.log('✅ Deployment concluído:', url)
+    const url = `https://${deploymentData.url}`;
+    console.log('✅ Deployment concluído:', url);
     
-    return { url, projectId }
+    return { url, projectId };
   } catch (error) {
-    console.error('🔥 Vercel deployment error:', error)
-    throw new Error('Failed to deploy on Vercel')
+    console.error('🔥 Vercel deployment error:', error);
+    throw new Error('Failed to deploy on Vercel');
   }
 }

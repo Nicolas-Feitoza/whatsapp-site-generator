@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/utils/supabase'
-import { sendTextMessage } from '@/utils/whatsapp'
+import { sendActionButtons, sendTextMessage } from '@/utils/whatsapp'
 import { RequestType } from '@/types/types'
 
 export async function GET(request: Request) {
@@ -37,7 +37,30 @@ export async function POST(request: Request) {
     }
 
     const change = entry.changes?.[0]
-    const message = change?.value?.messages?.[0]
+    const value = change.value as any
+    // ── a) Botão “Gerar” / “Editar” ──
+    if (value.messages?.[0]?.interactive) {
+      const btnId = value.messages[0].interactive.button_reply.id  // 'gerar_site' ou 'editar_site'
+      const action = btnId === 'editar_site' ? 'editar' : 'gerar'
+      const userPhone = value.contacts[0].wa_id
+
+      console.log(`🔘 Botão clicado por ${userPhone}:`, action)
+      await supabase
+        .from('sessions')
+        .upsert({ user_phone: userPhone, action })
+
+      await sendTextMessage(
+        userPhone,
+        action === 'editar'
+          ? '✏️ O que você quer editar no seu site existente?'
+          : '✏️ Envie o texto do site que deseja gerar.'
+      )
+      return NextResponse.json({}, { status: 200 })
+    }
+    const message = value.messages?.[0]?.text
+    const userPhone = value.messages?.[0]?.from
+    const rawText   = message?.body || ''
+
     
     if (!message) {
       console.warn('⚠️ Nenhuma mensagem encontrada:', JSON.stringify(change))
@@ -47,12 +70,9 @@ export async function POST(request: Request) {
       )
     }
 
-    const userPhone = message.from
-    const userPrompt = message.text?.body
+    console.log(`📲 Mensagem recebida de ${userPhone}: "${rawText}"`)
 
-    console.log(`📲 Mensagem recebida de ${userPhone}: "${userPrompt}"`)
-
-    if (!userPrompt) {
+    if (!rawText) {
       console.warn('⚠️ Mensagem sem texto:', JSON.stringify(message))
       return NextResponse.json(
         { error: "No text in message" },
@@ -60,8 +80,22 @@ export async function POST(request: Request) {
       )
     }
 
-    if (!isValidSiteRequest(userPrompt)) {
-      console.log(`❌ Solicitação inválida de ${userPhone}: "${userPrompt}"`)
+    // ── b) Buscar sessão ativa ──
+    const { data: session } = await supabase
+    .from('sessions')
+    .select('action')
+    .eq('user_phone', userPhone)
+    .single()
+
+    if (!session) {
+    console.log('⚠️ Sem sessão para', userPhone, '-- reenviando botões')
+    await sendActionButtons(userPhone)
+    return NextResponse.json({}, { status: 200 })
+    }
+
+
+    if (!isValidSiteRequest(rawText)) {
+      console.log(`❌ Solicitação inválida de ${userPhone}: "${rawText}"`)
       await sendTextMessage(userPhone, "❌ Eu só posso criar sites! Tente algo como:\n\"Quero um site para minha loja de roupas\"\n\"Preciso de um portfolio profissional\"")
       return NextResponse.json(
         { error: "Invalid request type" },
@@ -70,12 +104,27 @@ export async function POST(request: Request) {
     }
 
     console.log('💾 Salvando solicitação no Supabase...')
+    // ── c) Determinar project_id para editar ──
+    let projectId: string | undefined
+    if (session.action === 'editar') {
+      const { data: lastReq } = await supabase
+        .from('requests')
+        .select('project_id')
+        .eq('user_phone', userPhone)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+      projectId = lastReq?.project_id ?? undefined
+    }
+
+    // Inserir no Supabase
     const { data, error } = await supabase
       .from('requests')
       .insert([{
         user_phone: userPhone,
-        prompt: userPrompt,
-        status: 'pending'
+        prompt: rawText,
+        status: 'pending',
+        project_id: projectId
       }])
       .select()
       .single()
@@ -92,6 +141,12 @@ export async function POST(request: Request) {
     console.log('🚀 Iniciando processamento assíncrono...')
     processRequestAsync(data.id)
 
+    // ── d) Limpar a sessão ──
+    await supabase
+    .from('sessions')
+    .delete()
+    .eq('user_phone', userPhone)
+
     return NextResponse.json({ status: 'processing' })
 
   } catch (error) {
@@ -102,7 +157,6 @@ export async function POST(request: Request) {
     )
   }
 }
-
 
 function isValidSiteRequest(prompt: string): boolean {
   const keywords = ["site", "página", "web", "landing page", "portfolio", "loja online", "e-commerce"]
