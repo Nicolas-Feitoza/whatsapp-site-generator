@@ -38,6 +38,11 @@ export async function POST(request: Request) {
 
     const change = entry.changes?.[0]
     const value = change.value as any
+    // ── Filtrar status updates (sent/read/etc) ──
+    if (value.statuses) {
+      console.log('📈 Status update recebido, ignorando:', JSON.stringify(value.statuses))
+      return NextResponse.json({}, { status: 200 })
+    }
     // ── a) Botão “Gerar” / “Editar” ──
     if (value.messages?.[0]?.interactive) {
       const btnId = value.messages[0].interactive.button_reply.id  // 'gerar_site' ou 'editar_site'
@@ -139,7 +144,7 @@ export async function POST(request: Request) {
     await sendTextMessage(userPhone, "⌛ Gerando seu site profissional... Isso pode levar até 1 minuto!")
     
     console.log('🚀 Iniciando processamento assíncrono...')
-    processRequestAsync(data.id)
+    await processRequestAsync(data.id)
 
     // ── d) Limpar a sessão ──
     await supabase
