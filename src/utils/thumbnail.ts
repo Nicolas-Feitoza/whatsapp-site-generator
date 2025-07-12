@@ -2,49 +2,45 @@ import { supabase } from '@/utils/supabase'
 
 export const captureThumbnail = async (siteUrl: string): Promise<string> => {
   try {
-    // 1️⃣ Chama Microlink e valida JSON
+    // 1️⃣ Gerar screenshot via Microlink e validar JSON
     const apiUrl = `https://api.microlink.io?url=${encodeURIComponent(siteUrl)}&screenshot=true&meta=false`
     const apiRes = await fetch(apiUrl)
     const apiCT = apiRes.headers.get('content-type') || ''
     if (!apiRes.ok || !apiCT.includes('application/json')) {
-      const errBody = await apiRes.text()
-      throw new Error(`Microlink não retornou JSON: ${apiCT} – ${errBody.slice(0,100)}`)
+      const text = await apiRes.text()
+      throw new Error(`Microlink retornou ${apiCT}: ${text.slice(0, 100)}`)
     }
-    const { data } = await apiRes.json() as { data: { screenshot: { url: string } } }
+    const { data } = (await apiRes.json()) as { data: { screenshot: { url: string } } }
     const thumbnailUrl = data.screenshot.url
     if (!thumbnailUrl) throw new Error('Microlink não retornou data.screenshot.url')
 
-    // 2️⃣ Faz download da imagem e valida o Content-Type
+    // 2️⃣ Baixar a imagem e validar content-type
     const imageRes = await fetch(thumbnailUrl)
     const imgCT = imageRes.headers.get('content-type') || ''
     if (!imageRes.ok || !imgCT.startsWith('image/')) {
-      const errBody = await imageRes.text()
-      throw new Error(`Esperava imagem, recebi ${imgCT}: ${errBody.slice(0,100)}`)
+      const text = await imageRes.text()
+      throw new Error(`Esperava imagem, recebi ${imgCT}: ${text.slice(0, 100)}`)
     }
-    const imageBuffer = Buffer.from(await imageRes.arrayBuffer())
+    const buffer = Buffer.from(await imageRes.arrayBuffer())
 
-    // 3️⃣ Upload no Supabase com visibilidade pública
+    // 3️⃣ Upload para Supabase e criar Signed URL de 1 hora
     const fileName = `thumbnail-${Date.now()}.jpg`
-    const { data: uploaded, error: uploadError } = await supabase.storage
+    const { data: uploadData, error: uploadErr } = await supabase.storage
       .from('thumbnails')
-      .upload(fileName, imageBuffer, {
+      .upload(fileName, buffer, {
         contentType: imgCT,
-        upsert: false,
         cacheControl: '3600',
+        upsert: false,
         metadata: { visibility: 'public' }
       })
-    if (uploadError) throw uploadError
+    if (uploadErr) throw uploadErr
 
-    // 4️⃣ Retorna URL pública
-    const { data: publicUrlData } = supabase.storage
+    const { data: signedData, error: signedErr } = await supabase.storage
       .from('thumbnails')
-      .getPublicUrl(uploaded.path)
+      .createSignedUrl(uploadData.path, 60 * 60)
+    if (signedErr || !signedData.signedUrl) throw signedErr || new Error('Falha ao gerar Signed URL')
 
-    if (!publicUrlData.publicUrl) {
-      throw new Error('Não foi possível obter publicUrl do Supabase')
-    }
-
-    return publicUrlData.publicUrl
+    return signedData.signedUrl
 
   } catch (error) {
     console.error('Thumbnail capture error:', error)

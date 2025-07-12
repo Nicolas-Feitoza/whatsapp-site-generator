@@ -10,8 +10,12 @@ interface RequestBody {
 }
 
 export async function POST(request: Request) {
+  let requestId: string | undefined
+
   try {
+    // 1️⃣ Ler ID da requisição
     const { id } = (await request.json()) as RequestBody
+    requestId = id
     console.log('📥 Deploy request for ID:', id)
 
     if (!id) {
@@ -19,7 +23,31 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'ID is required' }, { status: 400 })
     }
 
-    // Buscar pedido
+    // 2️⃣ Verificar status atual e evitar duplicação
+    const { data: reqRow, error: statusFetchError } = await supabase
+      .from('requests')
+      .select('status')
+      .eq('id', id)
+      .single()
+
+    if (statusFetchError || !reqRow) {
+      console.error('❌ Could not fetch request status:', statusFetchError)
+      return NextResponse.json({ error: 'Request not found' }, { status: 404 })
+    }
+
+    // Se já estiver em processamento ou concluído, não re-executa o fluxo
+    if (reqRow.status !== 'pending') {
+      console.log('💡 Deploy already in progress or done, skipping.')
+      return NextResponse.json({ success: true })
+    }
+
+    // 3️⃣ Marcar como processing
+    await supabase
+      .from('requests')
+      .update({ status: 'processing', updated_at: new Date().toISOString() })
+      .eq('id', id)
+
+    // 4️⃣ Buscar dados da requisição
     const { data: siteRequest, error: fetchError } = await supabase
       .from('requests')
       .select('*')
@@ -27,27 +55,31 @@ export async function POST(request: Request) {
       .single()
 
     if (fetchError || !siteRequest) {
-      console.error('❌ Request not found:', fetchError)
-      return NextResponse.json({ error: 'Request not found' }, { status: 404 })
+      console.error('❌ Request not found after marking processing:', fetchError)
+      throw new Error('Request not found')
     }
 
     console.log('📝 Prompt do usuário:', siteRequest.prompt)
 
-    // Gerar código
+    // 5️⃣ Gerar código HTML
     const templateCode = await generateTemplate(siteRequest.prompt)
     console.log('🧠 Template gerado, tamanho:', templateCode.length)
 
-    // Obter ou reaproveitar projeto Vercel por telefone
+    // 6️⃣ Obter ou criar projeto Vercel
     const projectId = await getOrCreateProjectId(siteRequest.user_phone)
 
-    // Deploy no projeto
-    const { url: vercelUrl } = await deployOnVercel(templateCode, projectId)
-
-    // Capturar thumbnail
+    // 7️⃣ Fazer deploy no Vercel
+    const { url: vercelUrl } = await deployOnVercel(
+      templateCode,
+      projectId,
+      siteRequest.user_phone
+    )
+    
+    // 8️⃣ Gerar thumbnail
     const thumbnailUrl = await captureThumbnail(vercelUrl)
     console.log('📸 Thumbnail criada:', thumbnailUrl)
 
-    // Atualizar registro no Supabase
+    // 9️⃣ Atualizar registro como completed
     const { error: updateError } = await supabase
       .from('requests')
       .update({
@@ -60,13 +92,13 @@ export async function POST(request: Request) {
       .eq('id', id)
 
     if (updateError) {
-      console.error('❌ Erro ao atualizar registro:', updateError)
+      console.error('❌ Erro ao atualizar request como completed:', updateError)
       throw updateError
     }
 
     console.log('✅ Registro atualizado, enviando mensagens...')
 
-    // Enviar ao usuário
+    // 🔟 Enviar mensagens ao usuário
     await sendImageMessage(siteRequest.user_phone, thumbnailUrl)
     await sendTextMessage(
       siteRequest.user_phone,
@@ -78,18 +110,15 @@ export async function POST(request: Request) {
   } catch (error: unknown) {
     console.error('🔥 Deploy error:', error)
 
-    let requestId: string | undefined
-    try {
-      const body = await request.json()
-      requestId = (body as RequestBody).id
-    } catch {
-      console.error('❌ Failed to parse error request body')
-    }
-
+    // Marcar como failed se tivermos o ID
     if (requestId) {
       console.log('⚠️ Marcando request como failed:', requestId)
-      await supabase.from('requests').update({ status: 'failed' }).eq('id', requestId)
+      await supabase
+        .from('requests')
+        .update({ status: 'failed', updated_at: new Date().toISOString() })
+        .eq('id', requestId)
 
+      // Notificar usuário
       const { data: failedReq } = await supabase
         .from('requests')
         .select('user_phone')

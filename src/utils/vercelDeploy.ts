@@ -7,14 +7,14 @@ interface VercelDeployment {
   readyState: string
 }
 
-// 🧼 Função de sanitização de nomes para Vercel
+// Reaproveita a mesma sanitização usada para project names
 const sanitizeProjectName = (rawName: string): string => {
   return rawName
     .toLowerCase()
-    .replace(/[^a-z0-9._-]/g, '-')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 100)
+    .replace(/[^a-z0-9._-]/g, '-')   // substitui inválidos por hífen
+    .replace(/-{2,}/g, '-')          // unifica múltiplos hífens
+    .replace(/^-+|-+$/g, '')         // retira hífens de borda
+    .slice(0, 100)                   // até 100 chars
 }
 
 export const getOrCreateProjectId = async (userPhone: string): Promise<string> => {
@@ -25,94 +25,88 @@ export const getOrCreateProjectId = async (userPhone: string): Promise<string> =
     .single()
 
   if (existing?.project_id) {
-    console.log('🔄 Projeto já vinculado:', existing.project_id)
     return existing.project_id
   }
 
-  const safeProjectName = sanitizeProjectName(`site-${userPhone}`)
-  console.log('🆕 Tentando criar novo projeto Vercel:', safeProjectName)
-
-  const projectRes = await fetch('https://api.vercel.com/v9/projects', {
+  const safeName = sanitizeProjectName(`site-${userPhone}`)
+  const res = await fetch('https://api.vercel.com/v9/projects', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ name: safeProjectName })
+    body: JSON.stringify({ name: safeName })
   })
+  const data = await res.json()
+  if (!res.ok && !(res.status === 409 && data.error?.code === 'conflict')) {
+    console.error('Erro criando projeto:', data)
+    throw data
+  }
 
-  const projectData = await projectRes.json()
-
-  if (projectRes.status === 409 && projectData?.error?.code === 'conflict') {
-    console.warn('⚠️ Projeto já existe no Vercel. Recuperando...')
-
-    const listRes = await fetch(`https://api.vercel.com/v9/projects?search=${safeProjectName}`, {
-      headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` }
-    })
+  // Se já existe, buscamos o ID pelo nome
+  let projectId = data.id
+  if (res.status === 409) {
+    const listRes = await fetch(
+      `https://api.vercel.com/v9/projects?search=${safeName}`,
+      { headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` } }
+    )
     const listData = await listRes.json()
-    const matched = listData.projects?.find((p: any) => p.name === safeProjectName)
-
-    if (!matched?.id) throw new Error('Projeto existente não encontrado no painel da Vercel.')
-
-    console.log('✅ Projeto recuperado:', matched.id)
-    await supabase.from('user_projects').upsert({ user_phone: userPhone, project_id: matched.id })
-    return matched.id
+    projectId = listData.projects.find((p: any) => p.name === safeName).id
   }
-
-  if (!projectRes.ok) {
-    console.error('❌ Erro criando projeto Vercel:', projectData)
-    throw projectData
-  }
-
-  const projectId = projectData.id
-  console.log('✅ Projeto criado com ID:', projectId)
 
   await supabase.from('user_projects').upsert({ user_phone: userPhone, project_id: projectId })
   return projectId
 }
 
-
 export const deployOnVercel = async (
   htmlContent: string,
-  projectId: string
+  projectId: string,
+  userPhone: string
 ): Promise<{ url: string; projectId: string }> => {
-  try {
-    // Criar nome seguro para o deploy
-    const rawDeployName = `site-${Date.now()}`
-    const safeDeployName = sanitizeProjectName(rawDeployName)
+  // 1️⃣ Deploy no Vercel
+  const rawDeployName = `site-${Date.now()}`
+  const safeDeployName = sanitizeProjectName(rawDeployName)
 
-    console.log('🚀 Iniciando deployment no projeto:', projectId)
+  const deployRes = await fetch('https://api.vercel.com/v13/deployments', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      name: safeDeployName,
+      project: projectId,
+      target: 'production',
+      files: [
+        {
+          file: '/index.html',
+          data: Buffer.from(htmlContent).toString('base64')
+        }
+      ]
+    })
+  })
 
-    const deploymentRes = await fetch('https://api.vercel.com/v13/deployments', {
+  const deploymentData: VercelDeployment = await deployRes.json()
+  if (!deployRes.ok) {
+    console.error('Erro no deployment:', deploymentData)
+    throw deploymentData
+  }
+
+  // 2️⃣ Criar alias público
+  const aliasName = sanitizeProjectName(`site-${userPhone}`)
+  await fetch(
+    `https://api.vercel.com/v13/deployments/${deploymentData.id}/aliases`,
+    {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        name: safeDeployName,
-        project: projectId,
-        target: 'production',
-        files: [
-          {
-            file: '/index.html',
-            data: Buffer.from(htmlContent).toString('base64')
-          }
-        ]
-      })
-    })
-
-    const deploymentData: VercelDeployment = await deploymentRes.json()
-    if (!deploymentRes.ok) {
-      console.error('❌ Erro no deployment Vercel:', deploymentData)
-      throw deploymentData
+      body: JSON.stringify({ alias: `${aliasName}.vercel.app` })
     }
+  )
 
-    const url = `https://${deploymentData.url}`
-    console.log('✅ Deployment concluído:', url)
-    return { url, projectId }
-  } catch (error) {
-    console.error('🔥 Vercel deployment error:', error)
-    throw new Error('Failed to deploy on Vercel')
-  }
+  const publicUrl = `https://${aliasName}.vercel.app`
+  console.log('✅ Deployment com alias público disponível em:', publicUrl)
+  return { url: publicUrl, projectId }
 }
