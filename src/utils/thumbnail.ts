@@ -12,6 +12,9 @@ export const captureThumbnail = async (siteUrl: string): Promise<string> => {
 
     // 2️⃣ Baixar imagem como buffer
     const imageRes = await fetch(thumbnailUrl)
+    if (!imageRes.ok || !imageRes.headers.get('content-type')?.includes('image')) {
+      throw new Error(`Microlink thumbnail is not an image: ${await imageRes.text()}`)
+    }    
     const imageBuffer = await imageRes.arrayBuffer()
 
     // 3️⃣ Upload no Supabase com visibilidade pública
