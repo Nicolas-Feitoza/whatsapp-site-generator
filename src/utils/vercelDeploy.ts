@@ -7,6 +7,16 @@ interface VercelDeployment {
   readyState: string
 }
 
+// 🧼 Função de sanitização de nomes para Vercel
+const sanitizeProjectName = (rawName: string): string => {
+  return rawName
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '-')   // substitui caracteres inválidos por hífen
+    .replace(/-{2,}/g, '-')          // remove múltiplos hífens consecutivos
+    .replace(/^-+|-+$/g, '')         // remove hífens no início/fim
+    .slice(0, 100)                   // limita a 100 caracteres
+}
+
 export const getOrCreateProjectId = async (userPhone: string): Promise<string> => {
   // Buscar project_id já vinculado ao número
   const { data: existing } = await supabase
@@ -20,7 +30,10 @@ export const getOrCreateProjectId = async (userPhone: string): Promise<string> =
     return existing.project_id
   }
 
-  // Criar novo projeto no Vercel
+  // Criar novo projeto no Vercel com nome seguro
+  const rawProjectName = `site-${userPhone}`
+  const safeProjectName = sanitizeProjectName(rawProjectName)
+
   console.log('🆕 Criando novo projeto Vercel...')
   const projectRes = await fetch('https://api.vercel.com/v9/projects', {
     method: 'POST',
@@ -28,7 +41,7 @@ export const getOrCreateProjectId = async (userPhone: string): Promise<string> =
       Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ name: `site-${userPhone}` })
+    body: JSON.stringify({ name: safeProjectName })
   })
 
   const projectData = await projectRes.json()
@@ -51,6 +64,10 @@ export const deployOnVercel = async (
   projectId: string
 ): Promise<{ url: string; projectId: string }> => {
   try {
+    // Criar nome seguro para o deploy
+    const rawDeployName = `site-${Date.now()}`
+    const safeDeployName = sanitizeProjectName(rawDeployName)
+
     console.log('🚀 Iniciando deployment no projeto:', projectId)
 
     const deploymentRes = await fetch('https://api.vercel.com/v13/deployments', {
@@ -60,7 +77,7 @@ export const deployOnVercel = async (
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        name: `site-${Date.now()}`,
+        name: safeDeployName,
         project: projectId,
         target: 'production',
         files: [
