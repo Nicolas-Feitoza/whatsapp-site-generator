@@ -1,46 +1,41 @@
-import chromium from '@sparticuz/chromium'
-import puppeteer from 'puppeteer-core'
 import { supabase } from '@/utils/supabase'
 
-export const captureThumbnail = async (url: string): Promise<string> => {
-  let browser
-  
+export const captureThumbnail = async (siteUrl: string): Promise<string> => {
   try {
-    // Configurar Puppeteer
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      executablePath: process.env.CHROME_EXECUTABLE_PATH || await chromium.executablePath(),
-      headless: true,
-    })
+    // 1️⃣ Gerar imagem via Microlink
+    const response = await fetch(`https://api.microlink.io?url=${encodeURIComponent(siteUrl)}&screenshot=true&meta=false&embed=screenshot.url`)
+    const data = await response.json()
 
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1200, height: 630 })
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 })
-    
-    // Capturar screenshot
-    const screenshot = await page.screenshot({ type: 'jpeg', quality: 80 }) as Buffer
-    
-    // Upload para Supabase Storage
+    const thumbnailUrl = data?.data?.screenshot?.url
+    if (!thumbnailUrl) throw new Error('Thumbnail not found')
+    console.log('📸 Thumbnail temporária gerada:', thumbnailUrl)
+
+    // 2️⃣ Baixar imagem como buffer
+    const imageRes = await fetch(thumbnailUrl)
+    const imageBuffer = await imageRes.arrayBuffer()
+
+    // 3️⃣ Upload no Supabase com visibilidade pública
     const fileName = `thumbnail-${Date.now()}.jpg`
-    const { data, error } = await supabase.storage
+    const { data: uploaded, error: uploadError } = await supabase.storage
       .from('thumbnails')
-      .upload(fileName, screenshot, {
+      .upload(fileName, imageBuffer, {
         contentType: 'image/jpeg',
-        upsert: false
+        upsert: false,
+        cacheControl: '3600',
+        metadata: { visibility: 'public' } // 👈 aqui está o segredo!
       })
 
-    if (error) throw error
+    if (uploadError) throw uploadError
 
-    // Obter URL pública
+    // 4️⃣ Obter URL pública
     const { data: publicUrlData } = supabase.storage
       .from('thumbnails')
-      .getPublicUrl(data.path)
+      .getPublicUrl(uploaded.path)
 
+    console.log('🖼️ Thumbnail salva no Supabase:', publicUrlData.publicUrl)
     return publicUrlData.publicUrl
   } catch (error) {
     console.error('Thumbnail capture error:', error)
     throw new Error('Failed to generate thumbnail')
-  } finally {
-    if (browser) await browser.close()
   }
 }
