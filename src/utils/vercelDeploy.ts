@@ -46,7 +46,8 @@ export const deployOnVercel = async (
       },
       body: JSON.stringify({
         name: `temp-site-${Date.now()}`,
-        projectId,
+        project: projectId,
+        target: 'production',
         files: [
           {
             file: '/index.html',
