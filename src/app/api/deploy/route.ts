@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/utils/supabase'
 import { generateTemplate } from '@/utils/aiClient'
-import { deployOnVercel } from '@/utils/vercelDeploy'
+import { getOrCreateProjectId, deployOnVercel } from '@/utils/vercelDeploy'
 import { captureThumbnail } from '@/utils/thumbnail'
 import { sendImageMessage, sendTextMessage } from '@/utils/whatsapp'
 
@@ -37,13 +37,13 @@ export async function POST(request: Request) {
     const templateCode = await generateTemplate(siteRequest.prompt)
     console.log('🧠 Template gerado, tamanho:', templateCode.length)
 
-    // Deploy na Vercel (reaproveita project_id se existir)
-    const { url: vercelUrl, projectId } = await deployOnVercel(
-      templateCode,
-      (siteRequest as any).project_id // assumindo que você adicionou a coluna project_id
-    )
+    // Obter ou reaproveitar projeto Vercel por telefone
+    const projectId = await getOrCreateProjectId(siteRequest.user_phone)
 
-    // Gerar thumbnail
+    // Deploy no projeto
+    const { url: vercelUrl } = await deployOnVercel(templateCode, projectId)
+
+    // Capturar thumbnail
     const thumbnailUrl = await captureThumbnail(vercelUrl)
     console.log('📸 Thumbnail criada:', thumbnailUrl)
 
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
 
     console.log('✅ Registro atualizado, enviando mensagens...')
 
-    // Enviar resultado
+    // Enviar ao usuário
     await sendImageMessage(siteRequest.user_phone, thumbnailUrl)
     await sendTextMessage(
       siteRequest.user_phone,
@@ -74,10 +74,10 @@ export async function POST(request: Request) {
     )
 
     return NextResponse.json({ success: true })
+
   } catch (error: unknown) {
     console.error('🔥 Deploy error:', error)
 
-    // Tentar extrair ID para marcar falha
     let requestId: string | undefined
     try {
       const body = await request.json()
@@ -90,7 +90,6 @@ export async function POST(request: Request) {
       console.log('⚠️ Marcando request como failed:', requestId)
       await supabase.from('requests').update({ status: 'failed' }).eq('id', requestId)
 
-      // Notificar usuário
       const { data: failedReq } = await supabase
         .from('requests')
         .select('user_phone')
