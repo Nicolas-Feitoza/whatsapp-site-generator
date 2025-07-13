@@ -7,7 +7,6 @@ interface VercelDeployment {
   readyState: string
 }
 
-// Reaproveita a mesma sanitização usada para project names
 const sanitizeProjectName = (rawName: string): string => {
   return rawName
     .toLowerCase()
@@ -37,13 +36,13 @@ export const getOrCreateProjectId = async (userPhone: string): Promise<string> =
     },
     body: JSON.stringify({ name: safeName })
   })
+
   const data = await res.json()
   if (!res.ok && !(res.status === 409 && data.error?.code === 'conflict')) {
     console.error('Erro criando projeto:', data)
-    throw data
+    throw new Error(JSON.stringify(data))
   }
 
-  // Se já existe, buscamos o ID pelo nome
   let projectId = data.id
   if (res.status === 409) {
     const listRes = await fetch(
@@ -54,7 +53,10 @@ export const getOrCreateProjectId = async (userPhone: string): Promise<string> =
     projectId = listData.projects.find((p: any) => p.name === safeName).id
   }
 
-  await supabase.from('user_projects').upsert({ user_phone: userPhone, project_id: projectId })
+  await supabase
+    .from('user_projects')
+    .upsert({ user_phone: userPhone, project_id: projectId })
+
   return projectId
 }
 
@@ -63,10 +65,11 @@ export const deployOnVercel = async (
   projectId: string,
   userPhone: string
 ): Promise<{ url: string; projectId: string }> => {
-  // 1️⃣ Deploy no Vercel
+  // 1️⃣ Preparar o nome do deploy
   const rawDeployName = `site-${Date.now()}`
   const safeDeployName = sanitizeProjectName(rawDeployName)
 
+  // 2️⃣ Criar deployment (envia html cru, não Base64)
   const deployRes = await fetch('https://api.vercel.com/v13/deployments', {
     method: 'POST',
     headers: {
@@ -80,21 +83,28 @@ export const deployOnVercel = async (
       files: [
         {
           file: '/index.html',
-          data: Buffer.from(htmlContent).toString('base64')
+          data: htmlContent
         }
       ]
     })
   })
 
-  const deploymentData: VercelDeployment = await deployRes.json()
+  const deployCT = deployRes.headers.get('content-type') || ''
   if (!deployRes.ok) {
-    console.error('Erro no deployment:', deploymentData)
-    throw deploymentData
+    const errText = await deployRes.text()
+    console.error('Erro no deployment Vercel:', errText)
+    throw new Error(`Vercel deployment failed [${deployRes.status}]: ${errText}`)
+  }
+  if (!deployCT.includes('application/json')) {
+    const errText = await deployRes.text()
+    throw new Error(`Vercel não retornou JSON: ${errText.substring(0, 200)}`)
   }
 
-  // 2️⃣ Criar alias público
+  const deploymentData: VercelDeployment = await deployRes.json()
+
+  // 3️⃣ Criar alias público para domínio de produção
   const aliasName = sanitizeProjectName(`site-${userPhone}`)
-  await fetch(
+  const aliasRes = await fetch(
     `https://api.vercel.com/v13/deployments/${deploymentData.id}/aliases`,
     {
       method: 'POST',
@@ -105,6 +115,12 @@ export const deployOnVercel = async (
       body: JSON.stringify({ alias: `${aliasName}.vercel.app` })
     }
   )
+
+  if (!aliasRes.ok) {
+    const aliasErr = await aliasRes.text()
+    console.error('Erro criando alias no Vercel:', aliasErr)
+    throw new Error(`Failed to alias deployment: ${aliasErr}`)
+  }
 
   const publicUrl = `https://${aliasName}.vercel.app`
   console.log('✅ Deployment com alias público disponível em:', publicUrl)
