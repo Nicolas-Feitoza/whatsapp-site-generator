@@ -31,7 +31,7 @@ export async function POST(req: Request) {
       .maybeSingle();
 
     if (error) {
-      console.error("[WEBHOOK] 🔴 Session fetch error:", fetchSessionErr);
+      console.error("[WEBHOOK] 🔴 Session fetch error:", error);
     }
 
     let userSession = session;
