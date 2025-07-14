@@ -24,13 +24,13 @@ export async function POST(req: Request) {
     console.log("[WEBHOOK] ✉️ Message payload:", msg);
 
     /* ───────────────── 1) RETRIEVE OR CREATE SESSION ───────────────── */
-    const { data: session, error: fetchSessionErr } = await supabase
+    const { data: session, error } = await supabase
       .from("sessions")
       .select("*")
       .eq("user_phone", userPhone)
-      .single();
+      .maybeSingle();
 
-    if (fetchSessionErr) {
+    if (error) {
       console.error("[WEBHOOK] 🔴 Session fetch error:", fetchSessionErr);
     }
 
