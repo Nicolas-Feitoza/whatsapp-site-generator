@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server'
 import { supabase } from '@/utils/supabase'
 import { generateTemplate } from '@/utils/aiClient'
 import { getOrCreateProjectId, deployOnVercel } from '@/utils/vercelDeploy'
-import { captureThumbnail } from '@/utils/thumbnail'
 import { sendImageMessage, sendTextMessage } from '@/utils/whatsapp'
+import { captureWithPageSpeed } from '@/utils/thumbnail'
 
 interface RequestBody {
   id: string
@@ -76,7 +76,7 @@ export async function POST(request: Request) {
     )
     
     // 8️⃣ Gerar thumbnail
-    const thumbnailUrl = await captureThumbnail(vercelUrl)
+    const thumbnailUrl = await captureWithPageSpeed(vercelUrl)
     console.log('📸 Thumbnail criada:', thumbnailUrl)
 
     // 9️⃣ Atualizar registro como completed
