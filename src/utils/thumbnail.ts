@@ -2,48 +2,43 @@ import { supabase } from '@/utils/supabase'
 
 export const captureThumbnail = async (siteUrl: string): Promise<string> => {
   try {
-    // 1️⃣ Gerar imagem diretamente como dataURI
-    const apiUrl = `https://api.microlink.io?url=${encodeURIComponent(siteUrl)}&screenshot=true&meta=false&embed=screenshot.dataUri`
-    const response = await fetch(apiUrl)
-
-    const ct = response.headers.get('content-type') || ''
-    if (!response.ok || !ct.includes('application/json')) {
-      const body = await response.text()
-      throw new Error(`Microlink não retornou JSON válido (${ct}): ${body.slice(0,100)}`)
+    // 1️⃣ Gerar screenshot via Microlink e validar JSON
+    const apiUrl = `https://api.microlink.io?url=${encodeURIComponent(siteUrl)}&screenshot=true&meta=false`
+    const apiRes = await fetch(apiUrl)
+    const apiCT = apiRes.headers.get('content-type') || ''
+    if (!apiRes.ok || !apiCT.includes('application/json')) {
+      const text = await apiRes.text()
+      throw new Error(`Microlink retornou ${apiCT}: ${text.slice(0, 100)}`)
     }
+    const { data } = (await apiRes.json()) as { data: { screenshot: { url: string } } }
+    const thumbnailUrl = data.screenshot.url
+    if (!thumbnailUrl) throw new Error('Microlink não retornou data.screenshot.url')
 
-    const json = await response.json() as {
-      data?: { screenshot?: { dataUri?: string } }
+    // 2️⃣ Baixar a imagem e validar content-type
+    const imageRes = await fetch(thumbnailUrl)
+    const imgCT = imageRes.headers.get('content-type') || ''
+    if (!imageRes.ok || !imgCT.startsWith('image/')) {
+      const text = await imageRes.text()
+      throw new Error(`Esperava imagem, recebi ${imgCT}: ${text.slice(0, 100)}`)
     }
+    const buffer = Buffer.from(await imageRes.arrayBuffer())
 
-    const dataUri = json.data?.screenshot?.dataUri
-    if (!dataUri || !dataUri.startsWith('data:image')) {
-      throw new Error(`Microlink falhou ao gerar dataUri válido: ${JSON.stringify(json).slice(0,200)}`)
-    }
-
-    // 2️⃣ Extrair o Base64 e transformar em Buffer
-    const [, base64] = dataUri.split(',')
-    const buffer = Buffer.from(base64, 'base64')
-
-    // 3️⃣ Upload no Supabase com tipo correto
-    const fileName = `thumbnail-${Date.now()}.png`
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    // 3️⃣ Upload para Supabase e criar Signed URL de 1 hora
+    const fileName = `thumbnail-${Date.now()}.jpg`
+    const { data: uploadData, error: uploadErr } = await supabase.storage
       .from('thumbnails')
       .upload(fileName, buffer, {
-        contentType: 'image/png',
+        contentType: imgCT,
+        cacheControl: '3600',
         upsert: false,
-        cacheControl: '3600'
+        metadata: { visibility: 'public' }
       })
-    if (uploadError) throw uploadError
+    if (uploadErr) throw uploadErr
 
-    // 4️⃣ Gerar Signed URL de 1 hora
-    const { data: signedData, error: signedError } = await supabase.storage
+    const { data: signedData, error: signedErr } = await supabase.storage
       .from('thumbnails')
       .createSignedUrl(uploadData.path, 60 * 60)
-
-    if (signedError || !signedData?.signedUrl) {
-      throw signedError || new Error('Erro ao criar Signed URL da imagem')
-    }
+    if (signedErr || !signedData.signedUrl) throw signedErr || new Error('Falha ao gerar Signed URL')
 
     return signedData.signedUrl
 
