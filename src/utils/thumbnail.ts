@@ -1,49 +1,36 @@
-import { supabase } from '@/utils/supabase'
+import { supabase } from "./supabase";
 
-export const captureThumbnail = async (siteUrl: string): Promise<string> => {
-  try {
-    // 1️⃣ Gerar screenshot via Microlink e validar JSON
-    const apiUrl = `https://api.microlink.io?url=${encodeURIComponent(siteUrl)}&screenshot=true&meta=false`
-    const apiRes = await fetch(apiUrl)
-    const apiCT = apiRes.headers.get('content-type') || ''
-    if (!apiRes.ok || !apiCT.includes('application/json')) {
-      const text = await apiRes.text()
-      throw new Error(`Microlink retornou ${apiCT}: ${text.slice(0, 100)}`)
-    }
-    const { data } = (await apiRes.json()) as { data: { screenshot: { url: string } } }
-    const thumbnailUrl = data.screenshot.url
-    if (!thumbnailUrl) throw new Error('Microlink não retornou data.screenshot.url')
+export const captureThumbnail = async (rawUrl: string): Promise<string> => {
+  // 0. Normaliza a URL
+  const siteUrl = /^(https?:)?\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
 
-    // 2️⃣ Baixar a imagem e validar content-type
-    const imageRes = await fetch(thumbnailUrl)
-    const imgCT = imageRes.headers.get('content-type') || ''
-    if (!imageRes.ok || !imgCT.startsWith('image/')) {
-      const text = await imageRes.text()
-      throw new Error(`Esperava imagem, recebi ${imgCT}: ${text.slice(0, 100)}`)
-    }
-    const buffer = Buffer.from(await imageRes.arrayBuffer())
+  // 1. Chama Microlink
+  const api = `https://api.microlink.io?url=${encodeURIComponent(siteUrl)}` +
+              '&screenshot=true&meta=false&prerender=true';
+  const apiRes = await fetch(api);
+  const { status, code, message, data } = await apiRes.json();
+  if (status !== 'success') throw new Error(`${code}: ${message}`);
 
-    // 3️⃣ Upload para Supabase e criar Signed URL de 1 hora
-    const fileName = `thumbnail-${Date.now()}.jpg`
-    const { data: uploadData, error: uploadErr } = await supabase.storage
-      .from('thumbnails')
-      .upload(fileName, buffer, {
-        contentType: imgCT,
-        cacheControl: '3600',
-        upsert: false,
-        metadata: { visibility: 'public' }
-      })
-    if (uploadErr) throw uploadErr
+  // 2. Baixa a imagem
+  const thumbRes = await fetch(data.screenshot.url);
+  const imgCT = thumbRes.headers.get('content-type') ?? 'application/octet-stream';
+  if (!imgCT.startsWith('image/')) throw new Error(`Microlink devolveu ${imgCT}`);
+  const buffer = Buffer.from(await thumbRes.arrayBuffer());
 
-    const { data: signedData, error: signedErr } = await supabase.storage
-      .from('thumbnails')
-      .createSignedUrl(uploadData.path, 60 * 60)
-    if (signedErr || !signedData.signedUrl) throw signedErr || new Error('Falha ao gerar Signed URL')
+  // 3. Faz upload (extensão correta!)
+  const ext = imgCT.split('/')[1];
+  const fileName = `thumbnail-${Date.now()}.${ext}`;
+  const { data: up, error: upErr } =
+    await supabase.storage.from('thumbnails').upload(fileName, buffer, {
+      contentType: imgCT,
+      cacheControl: '3600'
+    });
+  if (upErr) throw upErr;
 
-    return signedData.signedUrl
+  // 4. Gera URL assinada
+  const { data: signed, error: signErr } =
+    await supabase.storage.from('thumbnails').createSignedUrl(up.path, 3600);
+  if (signErr) throw signErr;
 
-  } catch (error) {
-    console.error('Thumbnail capture error:', error)
-    throw new Error('Failed to generate thumbnail')
-  }
-}
+  return signed.signedUrl!;
+};
