@@ -107,34 +107,35 @@ export const sendImageMessage = async (to: string, imageUrl: string) => {
   }
 }
 
-export const sendActionButtons = async (to: string) => {
-  try {
-    console.log('📋 Enviando botões de ação para:', to)
-    await fetch(`https://graph.facebook.com/v17.0/${PHONE_ID}/messages`, {
-      method: 'POST',
-      headers: { 
-        'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`, 
-        'Content-Type': 'application/json' 
+export const sendActionButtons = async (
+  to: string,
+  ids: ("gerar_site" | "editar_site" | "sair")[] = ["gerar_site", "editar_site"]
+) => {
+  const titles: Record<string, string> = {
+    gerar_site: "Gerar site",
+    editar_site: "Editar site",
+    sair: "Sair",
+  };
+  await fetch(`https://graph.facebook.com/v17.0/${PHONE_ID}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to,
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: "Escolha uma opção:" },
+        action: {
+          buttons: ids.map((id) => ({
+            type: "reply",
+            reply: { id, title: titles[id] },
+          })),
+        },
       },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: 'O que você deseja fazer?' },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'gerar_site', title: 'Gerar site' } },
-              { type: 'reply', reply: { id: 'editar_site', title: 'Editar site' } }
-            ]
-          }
-        }
-      })
-    })
-    
-  } catch (error) {
-    console.error('❌ sendActionButtons error:', error)
-    throw error
-  }
-}
+    }),
+  });
+};

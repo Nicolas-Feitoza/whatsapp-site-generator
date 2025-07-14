@@ -1,141 +1,113 @@
-import { NextResponse } from 'next/server'
-import { supabase } from '@/utils/supabase'
-import { generateTemplate } from '@/utils/aiClient'
-import { getOrCreateProjectId, deployOnVercel } from '@/utils/vercelDeploy'
-import { sendImageMessage, sendTextMessage } from '@/utils/whatsapp'
-import { captureWithPageSpeed } from '@/utils/thumbnail'
-
-interface RequestBody {
-  id: string
-}
+import { NextResponse } from "next/server";
+import pTimeout from "p-timeout";
+import { supabase } from "@/utils/supabase";
+import { generateTemplate } from "@/utils/aiClient";
+import { deployOnVercel } from "@/utils/vercelDeploy";
+import { captureThumbnail } from "@/utils/thumbnail";
+import { sendTextMessage, sendImageMessage } from "@/utils/whatsapp";
 
 export async function POST(request: Request) {
-  let requestId: string | undefined
+  let requestId: string | undefined;
 
   try {
-    // 1️⃣ Ler ID da requisição
-    const { id } = (await request.json()) as RequestBody
-    requestId = id
-    console.log('📥 Deploy request for ID:', id)
+    const { id } = (await request.json()) as { id: string };
+    requestId = id;
 
-    if (!id) {
-      console.warn('⚠️ ID is required')
-      return NextResponse.json({ error: 'ID is required' }, { status: 400 })
-    }
-
-    // 2️⃣ Verificar status atual e evitar duplicação
-    const { data: reqRow, error: statusFetchError } = await supabase
-      .from('requests')
-      .select('status')
-      .eq('id', id)
-      .single()
-
-    if (statusFetchError || !reqRow) {
-      console.error('❌ Could not fetch request status:', statusFetchError)
-      return NextResponse.json({ error: 'Request not found' }, { status: 404 })
-    }
-
-    // Se já estiver em processamento ou concluído, não re-executa o fluxo
-    if (reqRow.status !== 'pending') {
-      console.log('💡 Deploy already in progress or done, skipping.')
-      return NextResponse.json({ success: true })
-    }
-
-    // 3️⃣ Marcar como processing
     await supabase
-      .from('requests')
-      .update({ status: 'processing', updated_at: new Date().toISOString() })
-      .eq('id', id)
+      .from("requests")
+      .update({ status: "processing", updated_at: new Date().toISOString() })
+      .eq("id", id);
 
-    // 4️⃣ Buscar dados da requisição
-    const { data: siteRequest, error: fetchError } = await supabase
-      .from('requests')
-      .select('*')
-      .eq('id', id)
-      .single()
+    const { data: siteRequest } = await supabase
+      .from("requests")
+      .select("*")
+      .eq("id", id)
+      .single();
 
-    if (fetchError || !siteRequest) {
-      console.error('❌ Request not found after marking processing:', fetchError)
-      throw new Error('Request not found')
+    // ✅ Corrigido: segundo parâmetro agora é objeto { timeout }
+    const templateCode = await pTimeout(
+      generateTemplate(siteRequest.prompt),
+      { milliseconds: 2 * 60_000 }
+    );
+
+    const deployed = await pTimeout(
+      deployOnVercel(
+        templateCode,
+        siteRequest.project_id,
+        siteRequest.user_phone
+      ),
+      { milliseconds: 4 * 60_000 }
+    );
+
+    // ✅ Verificação segura do `.url`
+    const vercelUrl = deployed?.url;
+    if (!vercelUrl) {
+      throw new Error("Vercel deployment failed: missing URL.");
     }
 
-    console.log('📝 Prompt do usuário:', siteRequest.prompt)
+    const { data: prev } = await supabase
+      .from("requests")
+      .select("thumbnail_url, updated_at")
+      .eq("vercel_url", vercelUrl)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .single();
 
-    // 5️⃣ Gerar código HTML
-    const templateCode = await generateTemplate(siteRequest.prompt)
-    console.log('🧠 Template gerado, tamanho:', templateCode.length)
+    let thumbnailUrl = prev?.thumbnail_url;
+    const tooOld =
+      prev &&
+      Date.now() - new Date(prev.updated_at).getTime() > 60 * 60_000;
 
-    // 6️⃣ Obter ou criar projeto Vercel
-    const projectId = await getOrCreateProjectId(siteRequest.user_phone)
+    // ✅ Checagem segura para string | undefined
+    if (!thumbnailUrl || tooOld) {
+      thumbnailUrl = await captureThumbnail(vercelUrl);
+    }
 
-    // 7️⃣ Fazer deploy no Vercel
-    const { url: vercelUrl } = await deployOnVercel(
-      templateCode,
-      projectId,
-      siteRequest.user_phone
-    )
-    
-    // 8️⃣ Gerar thumbnail
-    const thumbnailUrl = await captureWithPageSpeed(vercelUrl)
-    console.log('📸 Thumbnail criada:', thumbnailUrl)
-
-    // 9️⃣ Atualizar registro como completed
-    const { error: updateError } = await supabase
-      .from('requests')
+    await supabase
+      .from("requests")
       .update({
-        status: 'completed',
+        status: "completed",
         vercel_url: vercelUrl,
         thumbnail_url: thumbnailUrl,
-        project_id: projectId,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
       })
-      .eq('id', id)
+      .eq("id", id);
 
-    if (updateError) {
-      console.error('❌ Erro ao atualizar request como completed:', updateError)
-      throw updateError
+    if (thumbnailUrl) {
+      await sendImageMessage(siteRequest.user_phone, thumbnailUrl);
     }
 
-    console.log('✅ Registro atualizado, enviando mensagens...')
-
-    // 🔟 Enviar mensagens ao usuário
-    await sendImageMessage(siteRequest.user_phone, thumbnailUrl)
     await sendTextMessage(
       siteRequest.user_phone,
-      `✅ Seu site está pronto!\n\n🌐 Acesse: ${vercelUrl}\n\n⚠️ Link válido por 24 horas!`
-    )
+      `✅ Seu site está pronto!\n\n🌐 ${vercelUrl}\n(Link válido por 24h)`
+    );
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true });
 
-  } catch (error: unknown) {
-    console.error('🔥 Deploy error:', error)
-
-    // Marcar como failed se tivermos o ID
+  } catch (err: any) {
     if (requestId) {
-      console.log('⚠️ Marcando request como failed:', requestId)
       await supabase
-        .from('requests')
-        .update({ status: 'failed', updated_at: new Date().toISOString() })
-        .eq('id', requestId)
+        .from("requests")
+        .update({ status: "failed", updated_at: new Date().toISOString() })
+        .eq("id", requestId);
 
-      // Notificar usuário
-      const { data: failedReq } = await supabase
-        .from('requests')
-        .select('user_phone')
-        .eq('id', requestId)
-        .single()
+      const { data: row } = await supabase
+        .from("requests")
+        .select("user_phone")
+        .eq("id", requestId)
+        .single();
 
-      if (failedReq?.user_phone) {
+      if (row?.user_phone) {
         await sendTextMessage(
-          failedReq.user_phone,
-          '❌ Ocorreu um erro ao gerar seu site. Estamos melhorando nosso sistema!'
-        )
+          row.user_phone,
+          `❌ Ocorreu um erro: ${(err && err.message) || err}`
+        );
       }
     }
 
-    const msg = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json({ error: msg }, { status: 500 })
+    return NextResponse.json(
+      { error: (err && err.message) || "Unknown error" },
+      { status: 500 }
+    );
   }
 }
-
-export const dynamic = 'force-dynamic'

@@ -1,55 +1,29 @@
 import { supabase } from "./supabase";
 
-export async function captureWithPageSpeed(url: string): Promise<string> {
-  const apiKey = process.env.GOOGLE_PAGESPEED_KEY;
-  if (!apiKey) throw new Error("❌ GOOGLE_PAGESPEED_KEY não está definida.");
+export async function captureThumbnail(url: string): Promise<string> {
+  const accessKey = process.env.SCREENSHOTONE_ACCESS_KEY;
+  if (!accessKey) throw new Error("🚨 SCREENSHOTONE_ACCESS_KEY não definida.");
 
   const endpoint =
-    `https://www.googleapis.com/pagespeedonline/v5/runPagespeed` +
-    `?url=${encodeURIComponent(url)}` +
-    `&key=${apiKey}` +
-    `&strategy=mobile`;
+    `https://api.screenshotone.com/v1/screenshot` +
+    `?access_key=${accessKey}` +
+    `&url=${encodeURIComponent(url)}` +
+    `&format=png&fullpage=false&width=1280&height=720`;
 
   const res = await fetch(endpoint);
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`❌ Pagespeed API error ${res.status}: ${txt}`);
-  }
+  if (!res.ok) throw new Error(`ScreenshotOne ${res.status}: ${await res.text()}`);
 
-  const json = await res.json();
-  const screenshotData = json.lighthouseResult?.audits?.["final-screenshot"]?.details?.data;
-  if (!screenshotData || !screenshotData.startsWith("data:image")) {
-    throw new Error("❌ Screenshot inválido ou ausente na resposta do PageSpeed.");
-  }
+  const buffer = Buffer.from(await res.arrayBuffer());
+  const fileName = `thumbnail-${Date.now()}.png`;
 
-  const [, b64] = screenshotData.split(",");
-  const binary = Buffer.from(b64, "base64");
-  const mime = screenshotData.match(/^data:(.+);base64/)?.[1] || "image/jpeg";
-  const ext = mime.split("/")[1] || "jpg";
-  const fileName = `thumbnail-${Date.now()}.${ext}`;
-
-  // Upload para Supabase
   const { data: up, error: upErr } = await supabase
-    .storage
-    .from("thumbnails")
-    .upload(fileName, binary, {
-      contentType: mime,
-      cacheControl: "3600",
-    });
+    .storage.from("thumbnails")
+    .upload(fileName, buffer, { contentType: "image/png", cacheControl: "3600" });
+  if (upErr || !up?.path) throw new Error(`Upload falhou: ${upErr?.message}`);
 
-  if (upErr || !up?.path) {
-    throw new Error(`❌ Falha no upload: ${upErr?.message || "Path ausente no retorno."}`);
-  }
-
-  // Geração de URL assinada
-  const { data: signed, error: signErr } = await supabase
-    .storage
-    .from("thumbnails")
-    .createSignedUrl(up.path, 3600);
-
-  if (signErr || !signed?.signedUrl) {
-    throw new Error(`❌ Falha ao gerar URL assinada: ${signErr?.message || "Dados nulos."}`);
-  }
+  const { data: signed, error: signErr } =
+    await supabase.storage.from("thumbnails").createSignedUrl(up.path, 3600);
+  if (signErr || !signed?.signedUrl) throw new Error(`Signed URL falhou: ${signErr?.message}`);
 
   return signed.signedUrl;
 }
