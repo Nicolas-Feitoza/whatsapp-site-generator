@@ -36,24 +36,24 @@ Retorne APENAS o código HTML.`,
     )
 
     const ct = response.headers.get('content-type') || ''
-    // 1) Status code
+
+    // 1) Checar status HTTP
     if (!response.ok) {
       const text = await response.text()
       throw new Error(
         `OpenRouter API error: status ${response.status}. Body: ${text.slice(0, 200)}`
       )
     }
-    // 2) Content-Type JSON
+
+    // 2) Garantir JSON
     if (!ct.includes('application/json')) {
       const text = await response.text()
       throw new Error(
-        `OpenRouter API retornou conteúdo inesperado (${ct}): ${text
-          .replace(/\s+/g, ' ')
-          .slice(0, 200)}`
+        `OpenRouter retornou tipo ${ct}: ${text.replace(/\s+/g, ' ').slice(0, 200)}`
       )
     }
 
-    // 3) JSON parse seguro
+    // 3) Parse seguro de JSON
     let payload: any
     try {
       payload = await response.json()
@@ -61,21 +61,23 @@ Retorne APENAS o código HTML.`,
       throw new Error(`Falha ao parsear JSON da OpenRouter: ${parseErr.message}`)
     }
 
-    // 4) Validação do payload
-    const content = payload.choices?.[0]?.message?.content
+    // 4) Extrair e validar conteúdo
+    let content = payload.choices?.[0]?.message?.content
     if (typeof content !== 'string' || !content.trim()) {
       throw new Error(
-        `OpenRouter retornou formato inesperado: ${JSON.stringify(payload).slice(
-          0,
-          200
-        )}`
+        `Formato inesperado da OpenRouter: ${JSON.stringify(payload).slice(0, 200)}`
       )
     }
+
+    // 5) Remover fences ```html … ```
+    content = content
+      .replace(/^```(?:html)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim()
 
     return content
   } catch (err: unknown) {
     console.error('AI generation error:', err)
-    // repassa mensagem original quando possível
     const msg = err instanceof Error ? err.message : 'Unknown AI error'
     throw new Error(`Failed to generate template: ${msg}`)
   }
