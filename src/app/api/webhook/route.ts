@@ -45,7 +45,7 @@ export async function POST(req: Request) {
           user_phone: userPhone,
           action: null,
           step: "start",
-          invalidSent: false,
+          invalidsent: false,
         })
         .select()
         .single();
@@ -87,7 +87,7 @@ export async function POST(req: Request) {
 
       const { error: updErr } = await supabase
         .from("sessions")
-        .update({ action, step: "aguardando_prompt", invalidSent: false })
+        .update({ action, step: "aguardando_prompt", invalidsent: false })
         .eq("user_phone", userPhone);
       if (updErr) console.error("[WEBHOOK] 🔴 Update session error:", updErr);
 
@@ -115,7 +115,7 @@ export async function POST(req: Request) {
 
     // Invalid request guard
     if (!isValidSiteRequest(rawText)) {
-      if (!userSession.invalidSent) {
+      if (!userSession.invalidsent) {
         console.log("[WEBHOOK] ❌ Invalid site request – sending warning");
         await sendTextMessage(
           userPhone,
@@ -123,9 +123,9 @@ export async function POST(req: Request) {
         );
         const { error: invErr } = await supabase
           .from("sessions")
-          .update({ invalidSent: true })
+          .update({ invalidsent: true })
           .eq("user_phone", userPhone);
-        if (invErr) console.error("[WEBHOOK] 🔴 Update invalidSent error:", invErr);
+        if (invErr) console.error("[WEBHOOK] 🔴 Update invalidsent error:", invErr);
       }
       return NextResponse.json({}, { status: 200 });
     }
@@ -153,7 +153,7 @@ export async function POST(req: Request) {
     /* ───────────────── 5) UPDATE SESSION STATE ───────────────── */
     const { error: sessUpdErr } = await supabase
       .from("sessions")
-      .update({ step: "processando", invalidSent: false })
+      .update({ step: "processando", invalidsent: false })
       .eq("user_phone", userPhone);
     if (sessUpdErr) console.error("[WEBHOOK] 🔴 Update session step error:", sessUpdErr);
 
