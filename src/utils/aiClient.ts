@@ -43,5 +43,6 @@ Retorne **APENAS** o HTML completo (sem markdown), com:
   return content
     .replace(/^```(?:html)?\s*/i, "")
     .replace(/\s*```$/i, "")
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "") // Remove scripts
     .trim();
 };

@@ -8,7 +8,8 @@ export async function captureThumbnail(url: string): Promise<string> {
     `https://api.screenshotone.com/v1/screenshot` +
     `?access_key=${accessKey}` +
     `&url=${encodeURIComponent(url)}` +
-    `&format=png&fullpage=false&width=1280&height=720`;
+    `&format=png&fullpage=false&width=1280&height=720` +
+    `&delay=5`; // Add 5-second delay
 
   const res = await fetch(endpoint);
   if (!res.ok) throw new Error(`ScreenshotOne ${res.status}: ${await res.text()}`);
@@ -18,12 +19,22 @@ export async function captureThumbnail(url: string): Promise<string> {
 
   const { data: up, error: upErr } = await supabase
     .storage.from("thumbnails")
-    .upload(fileName, buffer, { contentType: "image/png", cacheControl: "3600" });
-  if (upErr || !up?.path) throw new Error(`Upload falhou: ${upErr?.message}`);
+    .upload(fileName, buffer, { 
+      contentType: "image/png", 
+      cacheControl: "3600" 
+    });
+  
+  if (upErr || !up?.path) {
+    throw new Error(`Upload falhou: ${upErr?.message}`);
+  }
 
-  const { data: signed, error: signErr } =
-    await supabase.storage.from("thumbnails").createSignedUrl(up.path, 3600);
-  if (signErr || !signed?.signedUrl) throw new Error(`Signed URL falhou: ${signErr?.message}`);
+  const { data: signed, error: signErr } = await supabase
+    .storage.from("thumbnails")
+    .createSignedUrl(up.path, 3600);
+  
+  if (signErr || !signed?.signedUrl) {
+    throw new Error(`Signed URL falhou: ${signErr?.message}`);
+  }
 
   return signed.signedUrl;
 }

@@ -14,14 +14,14 @@ export async function POST(request: Request) {
     requestId = id;
     console.log(`\n[DEPLOY] 🚀 Starting deploy for request id=${id}`);
 
-    /* ───────────────── 1) MARK REQUEST AS PROCESSING ───────────────── */
+    // 1) Mark request as processing
     const { error: markProcErr } = await supabase
       .from("requests")
       .update({ status: "processing", updated_at: new Date().toISOString() })
       .eq("id", id);
     if (markProcErr) console.error("[DEPLOY] 🔴 Mark processing error:", markProcErr);
 
-    /* ───────────────── 2) FETCH REQUEST ROW ───────────────── */
+    // 2) Fetch request row
     const { data: siteRequest, error: fetchReqErr } = await supabase
       .from("requests")
       .select("*")
@@ -30,14 +30,14 @@ export async function POST(request: Request) {
     if (fetchReqErr) throw fetchReqErr;
     console.log("[DEPLOY] 🗂️ Request row:", siteRequest);
 
-    /* ───────────────── 3) GENERATE TEMPLATE CODE ───────────────── */
+    // 3) Generate template with increased timeout
     console.log("[DEPLOY] 🧠 Generating template via AI…");
     const templateCode = await pTimeout(generateTemplate(siteRequest.prompt), {
-      milliseconds: 2 * 60_000,
+      milliseconds: 5 * 60_000, // Increased to 5 minutes
     });
     console.log("[DEPLOY] ✅ Template generated (length:", templateCode.length, ")");
 
-    /* ───────────────── 4) DEPLOY TO VERCEL ───────────────── */
+    // 4) Deploy to Vercel
     console.log("[DEPLOY] 🚀 Deploying to Vercel…");
     const deployed = await pTimeout(
       deployOnVercel(templateCode, siteRequest.project_id, siteRequest.user_phone),
@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     }
     console.log("[DEPLOY] ✅ Deployed at", vercelUrl);
 
-    /* ───────────────── 5) THUMBNAIL CACHE / GENERATION ───────────────── */
+    // 5) Thumbnail handling
     const { data: prev, error: thumbPrevErr } = await supabase
       .from("requests")
       .select("thumbnail_url, updated_at")
@@ -61,9 +61,8 @@ export async function POST(request: Request) {
     if (thumbPrevErr) console.error("[DEPLOY] 🔴 Thumb prev fetch error:", thumbPrevErr);
 
     let thumbnailUrl = prev?.thumbnail_url;
-    const tooOld =
-      prev && Date.now() - new Date(prev.updated_at).getTime() > 60 * 60_000; // >1h
-
+    const tooOld = prev && Date.now() - new Date(prev.updated_at).getTime() > 60 * 60_000;
+    
     if (!thumbnailUrl || tooOld) {
       console.log("[DEPLOY] 📸 Capturing new thumbnail…");
       thumbnailUrl = await captureThumbnail(vercelUrl);
@@ -72,23 +71,23 @@ export async function POST(request: Request) {
       console.log("[DEPLOY] 🎯 Reusing cached thumbnail");
     }
 
-    /* ───────────────── 6) UPDATE REQUEST ROW ───────────────── */
+    // 6) Update request with projectId
     const { error: updReqErr } = await supabase
       .from("requests")
       .update({
         status: "completed",
         vercel_url: vercelUrl,
         thumbnail_url: thumbnailUrl,
+        project_id: deployed.projectId, // Store projectId
         updated_at: new Date().toISOString(),
       })
       .eq("id", id);
     if (updReqErr) console.error("[DEPLOY] 🔴 Update request error:", updReqErr);
 
-    /* ───────────────── 7) NOTIFY USER ───────────────── */
+    // 7) Notify user
     if (thumbnailUrl) {
-      await sendImageMessage(siteRequest.user_phone, thumbnailUrl).catch(err =>
-        console.error("[DEPLOY] 🔴 sendImageMessage error:", err)
-      );
+      await sendImageMessage(siteRequest.user_phone, thumbnailUrl)
+        .catch(err => console.error("[DEPLOY] 🔴 sendImageMessage error:", err));
     }
 
     await sendTextMessage(
@@ -99,7 +98,11 @@ export async function POST(request: Request) {
     console.log("[DEPLOY] 🎉 Finished successfully");
     return NextResponse.json({ success: true });
   } catch (err: any) {
-    console.error("[DEPLOY] 🔴 Caught error:", err);
+    console.error("[DEPLOY] 🔴 Caught error:", {
+      message: err.message,
+      stack: err.stack,
+      response: err.response?.data
+    });
 
     if (requestId) {
       const { error: markFailErr } = await supabase
@@ -118,7 +121,7 @@ export async function POST(request: Request) {
       if (row?.user_phone) {
         await sendTextMessage(
           row.user_phone,
-          `❌ Ocorreu um erro: ${(err && err.message) || err}`
+          "❌ Ocorreu um erro ao gerar seu site. Por favor, tente novamente mais tarde."
         ).catch(e => console.error("[DEPLOY] 🔴 sendTextMessage error:", e));
       }
     }

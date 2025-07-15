@@ -5,11 +5,9 @@ const PHONE_ID = process.env.WHATSAPP_PHONE_ID;
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 
-// Cache simples em memória
 let cachedToken: string | null = null;
 let tokenExpiry: number = 0;
 
-// Busca um novo token via Client Credentials e atualiza o cache
 async function refreshAccessToken(): Promise<void> {
   const res = await fetch('https://graph.facebook.com/oauth/access_token', {
     method: 'POST',
@@ -23,24 +21,26 @@ async function refreshAccessToken(): Promise<void> {
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Erro ao obter token: ${err}`)
+    throw new Error(`Erro ao obter token: ${err}`);
   }
 
   const rawdata = await res.json();
   const data = assertValidTokenResponse(rawdata);
   cachedToken = data.access_token;
   tokenExpiry = Math.floor(Date.now() / 1000) + (data.expires_in || 3600);
-};
+}
 
-// Retorna um access token válido, renovado se estiver prestes a expirar.
 async function getAccessToken(): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-
-  // Caso não houver token ou falter menos de 60s, renova
+  
   if (!cachedToken || now >= tokenExpiry - 60) {
-    await refreshAccessToken();
+    try {
+      await refreshAccessToken();
+    } catch (error) {
+      return process.env.WHATSAPP_TOKEN || "";
+    }
   }
-
+  
   return cachedToken!;
 }
 
@@ -52,7 +52,7 @@ export const sendTextMessage = async (to: string, text: string) => {
       {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -65,12 +65,15 @@ export const sendTextMessage = async (to: string, text: string) => {
       }
     );
 
-    const data = await response.json();
-    if (!response.ok) throw data;
-    return data;
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`WhatsApp API error: ${JSON.stringify(errorData)}`);
+    }
+    
+    return await response.json();
   } catch (error) {
-    console.error('WhatsApp send error:', error)
-    throw error
+    console.error('WhatsApp send error:', error);
+    throw error;
   }
 }
 
@@ -82,7 +85,7 @@ export const sendImageMessage = async (to: string, imageUrl: string) => {
       {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -90,20 +93,20 @@ export const sendImageMessage = async (to: string, imageUrl: string) => {
           recipient_type: 'individual',
           to,
           type: 'image',
-          image: {
-            link: imageUrl,
-            caption: 'Preview do seu site gerado',
-          },
+          image: { link: imageUrl, caption: 'Preview do seu site gerado' },
         }),
       }
     );
 
-    const data = await response.json();
-    if (!response.ok) throw data;
-    return data
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`WhatsApp image error: ${JSON.stringify(errorData)}`);
+    }
+    
+    return await response.json();
   } catch (error) {
-    console.error('WhatsApp image send error:', error)
-    throw error
+    console.error('WhatsApp image send error:', error);
+    throw error;
   }
 }
 
@@ -111,31 +114,37 @@ export const sendActionButtons = async (
   to: string,
   ids: ("gerar_site" | "editar_site" | "sair")[] = ["gerar_site", "editar_site"]
 ) => {
-  const titles: Record<string, string> = {
-    gerar_site: "Gerar site",
-    editar_site: "Editar site",
-    sair: "Sair",
-  };
-  await fetch(`https://graph.facebook.com/v17.0/${PHONE_ID}/messages`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to,
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: { text: "Escolha uma opção:" },
-        action: {
-          buttons: ids.map((id) => ({
-            type: "reply",
-            reply: { id, title: titles[id] },
-          })),
-        },
+  try {
+    const token = await getAccessToken();
+    const titles: Record<string, string> = {
+      gerar_site: "Gerar site",
+      editar_site: "Editar site",
+      sair: "Sair",
+    };
+    
+    await fetch(`https://graph.facebook.com/v17.0/${PHONE_ID}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
       },
-    }),
-  });
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to,
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: "Escolha uma opção:" },
+          action: {
+            buttons: ids.map((id) => ({
+              type: "reply",
+              reply: { id, title: titles[id] },
+            })),
+          },
+        },
+      }),
+    });
+  } catch (error) {
+    console.error('WhatsApp buttons error:', error);
+  }
 };
