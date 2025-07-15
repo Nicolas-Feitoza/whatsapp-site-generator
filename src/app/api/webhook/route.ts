@@ -9,7 +9,7 @@ const verifyWebhook = (req: Request) => {
   const token = url.searchParams.get("hub.verify_token");
   const challenge = url.searchParams.get("hub.challenge");
 
-  if (mode === "subscribe" && token === process.env.WHATSAPP_WEBHOOK_TOKEN) {
+  if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
     return new Response(challenge, { status: 200 });
   }
   return new Response("Verification failed", { status: 403 });
