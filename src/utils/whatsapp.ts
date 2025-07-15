@@ -52,7 +52,7 @@ export const sendTextMessage = async (to: string, text: string) => {
       {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -85,7 +85,7 @@ export const sendImageMessage = async (to: string, imageUrl: string) => {
       {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -125,7 +125,7 @@ export const sendActionButtons = async (
     await fetch(`https://graph.facebook.com/v17.0/${PHONE_ID}/messages`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
