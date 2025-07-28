@@ -119,10 +119,17 @@ async function handleTextMessage(message: any, session: any) {
 async function processSiteCreation(message: any, session: any) {
   const userPhone = session.user_phone;
   const text = message.text?.body || "";
-  
-  // Validação melhorada de prompt
+  const messageId = message.id;
+
+  // 1. Verificar se já existe request para esta mensagem
+  const existingRequest = await checkExistingRequest(messageId);
+  if (existingRequest) {
+    console.log('[WEBHOOK] 🔄 Mensagem já processada anteriormente');
+    return NextResponse.json({ status: 'already_processed' }, { status: 200 });
+  }
+
+  // 2. Validação de prompt
   const validation = validateSitePrompt(text);
-  
   if (!validation.isValid) {
     if (!session.invalidsent) {
       await sendTextMessage(
@@ -136,65 +143,124 @@ async function processSiteCreation(message: any, session: any) {
           ...(session.metadata || {}),
           lastInvalidPrompt: text
         }
-      });
+      }).catch(console.error);
     }
     return NextResponse.json({}, { status: 200 });
   }
 
   try {
-    // Criar solicitação no banco de dados
-    const { data: request, error: reqError } = await supabase
-      .from("requests")
-      .insert([{
-        user_phone: userPhone,
-        prompt: text,
-        status: "pending",
-        message_id: message.id,
-        project_id: session.action === "editar" ? await getLastProjectId(userPhone) : null
-      }])
-      .select()
-      .single();
+    // 3. Criar solicitação com tratamento de duplicidade
+    const request = await createSiteRequest({
+      userPhone,
+      text,
+      messageId,
+      action: session.action
+    });
 
-    if (reqError) throw reqError;
-
-    // Atualização segura da sessão
+    // 4. Atualizar sessão com upsert
     await updateSession(userPhone, {
       step: "processando",
       metadata: {
         lastPrompt: text,
         requestId: request.id
       }
-    });
+    }).catch(console.error);
 
     await sendTextMessage(userPhone, "✅ Pedido recebido! Estamos gerando seu site...");
 
-    // Disparar deploy com tratamento de erro
-    try {
-      await fetch(`${process.env.BASE_URL}/api/deploy`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: request.id }),
-      });
-    } catch (err) {
-      console.error("[WEBHOOK] 🔴 Deploy error:", err);
-      await updateSession(userPhone, {
-        step: "erro",
-        metadata: {
-          error: "deploy_failed"
-        }
-      });
-      await sendTextMessage(userPhone, "❌ Falha ao iniciar a geração do site. Tente novamente.");
-    }
+    // 5. Disparar deploy
+    await triggerDeploy(request.id);
 
     return NextResponse.json({ status: "processing" });
 
   } catch (error) {
     console.error("[WEBHOOK] 🔴 Site creation error:", error);
-    await updateSession(userPhone, {
-      step: "erro"
-    });
-    await sendTextMessage(userPhone, "❌ Ocorreu um erro ao processar sua solicitação.");
+    await handleSiteCreationError(userPhone, error);
     return NextResponse.json({ error: "Processing failed" }, { status: 500 });
+  }
+}
+
+// Funções auxiliares adicionadas:
+
+async function checkExistingRequest(messageId: string) {
+  const { data } = await supabase
+    .from('requests')
+    .select('id, status')
+    .eq('message_id', messageId)
+    .maybeSingle();
+
+  return data;
+}
+
+async function createSiteRequest(params: {
+  userPhone: string;
+  text: string;
+  messageId: string;
+  action: string;
+}) {
+  try {
+    const { data, error } = await supabase
+      .from('requests')
+      .insert([{
+        user_phone: params.userPhone,
+        prompt: params.text,
+        status: 'pending',
+        message_id: params.messageId,
+        project_id: params.action === 'editar' ? await getLastProjectId(params.userPhone) : null
+      }])
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+
+  } catch (error) {
+    if (isDuplicateError(error)) {
+      console.log('[WEBHOOK] 🔄 Request duplicado - recuperando existente');
+      const { data } = await supabase
+        .from('requests')
+        .select('*')
+        .eq('message_id', params.messageId)
+        .single();
+      
+      if (data) return data;
+    }
+    throw error;
+  }
+}
+
+function isDuplicateError(error: any): boolean {
+  return error.code === '23505';
+}
+
+async function triggerDeploy(requestId: string) {
+  try {
+    await fetch(`${process.env.BASE_URL}/api/deploy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: requestId }),
+    });
+  } catch (err) {
+    console.error("[WEBHOOK] 🔴 Deploy error:", err);
+    throw err;
+  }
+}
+
+async function handleSiteCreationError(userPhone: string, error: any) {
+  try {
+    await updateSession(userPhone, {
+      step: "erro",
+      metadata: {
+        error: error.message.slice(0, 200)
+      }
+    });
+
+    await sendTextMessage(
+      userPhone,
+      "❌ Ocorreu um erro ao processar sua solicitação. Por favor, tente novamente."
+    );
+  } catch (updateError) {
+    console.error("[WEBHOOK] 🔴 Failed to update error state:", updateError);
   }
 }
 

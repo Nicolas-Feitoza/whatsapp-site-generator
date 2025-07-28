@@ -55,16 +55,19 @@ export async function updateSession(
   userPhone: string,
   updates: Partial<SessionData>
 ): Promise<void> {
-  const { error } = await supabase
-    .from("sessions")
-    .upsert({
-      user_phone: userPhone,
-      ...updates,
-      updated_at: new Date().toISOString()
-    })
-    .eq("user_phone", userPhone);
+  try {
+    const { error } = await supabase
+      .from("sessions")
+      .upsert({
+        user_phone: userPhone,
+        ...updates,
+        updated_at: new Date().toISOString()
+      }, {
+        onConflict: 'user_phone' // Garante atualização em caso de conflito
+      });
 
-  if (error) {
+    if (error) throw error;
+  } catch (error) {
     console.error("Session update error:", error);
     throw new Error("Failed to update session");
   }
