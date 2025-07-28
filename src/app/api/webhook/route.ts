@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/utils/supabase";
 import { sendActionButtons, sendTextMessage } from "@/utils/whatsapp";
+import { getSession, updateSession, clearSession, validateTransition } from "@/utils/session";
+import { validateSitePrompt } from "@/utils/promptValidator";
 
-// 1. Validação do Webhook (GET)
+// 1. Validação do Webhook (GET) (mantido igual)
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const params = {
@@ -22,13 +24,12 @@ export async function GET(request: Request) {
   return new Response("Verification failed", { status: 403 });
 }
 
-// 2. Processamento de Mensagens (POST)
+// 2. Processamento de Mensagens (POST) - Versão Refatorada
 export async function POST(request: Request) {
   try {
     console.log("[WEBHOOK] 📨 Incoming message");
     const body = await request.json();
 
-    // Validação básica do payload
     if (!body.object || body.object !== "whatsapp_business_account") {
       console.error("[WEBHOOK] ❌ Invalid payload structure");
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
@@ -59,30 +60,18 @@ export async function POST(request: Request) {
       timestamp: message.timestamp
     });
 
-    // 3. Gerenciamento de Sessão
-    const { data: session, error: sessionError } = await supabase
-      .from("sessions")
-      .select("*")
-      .eq("user_phone", userPhone)
-      .maybeSingle();
+    // 3. Gerenciamento de Sessão Refatorado
+    const currentSession = await getSession(userPhone);
 
-    if (sessionError) {
-      console.error("[WEBHOOK] 🔴 Session error:", sessionError);
-      throw new Error("Database error");
+    // Processamento condicional baseado no estado
+    if (currentSession.step === "aguardando_prompt" && message.type === "text") {
+      return await processSiteCreation(message, currentSession);
     }
-
-    let currentSession = session || {
-      user_phone: userPhone,
-      action: null,
-      step: "start",
-      invalidsent: false
-    };
 
     // 4. Processamento por Tipo de Mensagem
     switch (message.type) {
       case "text":
         return await handleTextMessage(message, currentSession);
-      
       case "interactive":
         if (message.interactive?.type === "button_reply") {
           return await handleButtonReply(message.interactive.button_reply, currentSession);
@@ -90,16 +79,11 @@ export async function POST(request: Request) {
         break;
     }
 
-    // 5. Resposta padrão para tipos não suportados
-    try {
-      await sendTextMessage(
-        userPhone,
-        "⚠️ Eu só respondo a mensagens de texto ou botões no momento."
-      );
-    } catch (error) {
-      console.error("[WEBHOOK] 🔴 Failed to send error message:", error);
-    }
-
+    // Resposta para tipos não suportados
+    await sendTextMessage(
+      userPhone,
+      "⚠️ Eu só respondo a mensagens de texto ou botões no momento."
+    );
     return NextResponse.json({}, { status: 200 });
 
   } catch (error) {
@@ -111,102 +95,156 @@ export async function POST(request: Request) {
   }
 }
 
-// 6. Handlers Especializados
+// Handlers Atualizados
 async function handleTextMessage(message: any, session: any) {
-  const userPhone = message.from;
+  const userPhone = session.user_phone;
   const text = message.text?.body || "";
 
   console.log(`[WEBHOOK] 📝 Text message: ${text.slice(0, 50)}...`);
 
-  // Se não houver ação definida
-  if (!session.action || session.step === "start") {
+  if (!session.action || session.step === "start" || 
+     (session.step !== "aguardando_prompt" && session.step !== "processando")) {
+    await updateSession(userPhone, {
+      step: "start",
+      action: null
+    });
     await sendTextMessage(userPhone, "👋 Olá! Como posso ajudar?");
     await sendActionButtons(userPhone, ["gerar_site", "sair"]);
     return NextResponse.json({}, { status: 200 });
   }
 
-  // Validação de prompt para site
-  const isValidRequest = ["site", "página", "web", "portfolio", "loja"]
-    .some(k => text.toLowerCase().includes(k));
+  return NextResponse.json({}, { status: 200 });
+}
 
-  if (!isValidRequest) {
+async function processSiteCreation(message: any, session: any) {
+  const userPhone = session.user_phone;
+  const text = message.text?.body || "";
+  
+  // Validação melhorada de prompt
+  const validation = validateSitePrompt(text);
+  
+  if (!validation.isValid) {
     if (!session.invalidsent) {
       await sendTextMessage(
         userPhone,
-        '❌ Eu só posso criar sites! Diga algo como: "Quero um site para minha loja de roupas".'
+        `❌ ${validation.reason}${validation.suggestedPrompt ? `\n\nQue tal: "${validation.suggestedPrompt}"` : ''}`
       );
-      await supabase
-        .from("sessions")
-        .update({ invalidsent: true })
-        .eq("user_phone", userPhone);
+      
+      await updateSession(userPhone, {
+        invalidsent: true,
+        metadata: {
+          ...(session.metadata || {}),
+          lastInvalidPrompt: text
+        }
+      });
     }
     return NextResponse.json({}, { status: 200 });
   }
 
-  // Criar solicitação no banco de dados
-  const { data: request, error: reqError } = await supabase
-    .from("requests")
-    .insert([{
-      user_phone: userPhone,
-      prompt: text,
-      status: "pending",
-      message_id: message.id,
-      project_id: session.action === "editar" ? await getLastProjectId(userPhone) : null
-    }])
-    .select()
-    .single();
+  try {
+    // Criar solicitação no banco de dados
+    const { data: request, error: reqError } = await supabase
+      .from("requests")
+      .insert([{
+        user_phone: userPhone,
+        prompt: text,
+        status: "pending",
+        message_id: message.id,
+        project_id: session.action === "editar" ? await getLastProjectId(userPhone) : null
+      }])
+      .select()
+      .single();
 
-  if (reqError) throw new Error("Failed to create request");
+    if (reqError) throw reqError;
 
-  // Atualizar sessão e disparar processamento
-  await supabase
-    .from("sessions")
-    .update({ step: "processando" })
-    .eq("user_phone", userPhone);
+    // Atualização segura da sessão
+    await updateSession(userPhone, {
+      step: "processando",
+      metadata: {
+        lastPrompt: text,
+        requestId: request.id
+      }
+    });
 
-  await sendTextMessage(userPhone, "✅ Pedido recebido! Estamos gerando seu site...");
+    await sendTextMessage(userPhone, "✅ Pedido recebido! Estamos gerando seu site...");
 
-  // Disparar deploy em segundo plano
-  fetch(`${process.env.BASE_URL}/api/deploy`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: request.id }),
-  }).catch(err => console.error("[WEBHOOK] 🔴 Deploy error:", err));
+    // Disparar deploy com tratamento de erro
+    try {
+      await fetch(`${process.env.BASE_URL}/api/deploy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: request.id }),
+      });
+    } catch (err) {
+      console.error("[WEBHOOK] 🔴 Deploy error:", err);
+      await updateSession(userPhone, {
+        step: "erro",
+        metadata: {
+          error: "deploy_failed"
+        }
+      });
+      await sendTextMessage(userPhone, "❌ Falha ao iniciar a geração do site. Tente novamente.");
+    }
 
-  return NextResponse.json({ status: "processing" });
+    return NextResponse.json({ status: "processing" });
+
+  } catch (error) {
+    console.error("[WEBHOOK] 🔴 Site creation error:", error);
+    await updateSession(userPhone, {
+      step: "erro"
+    });
+    await sendTextMessage(userPhone, "❌ Ocorreu um erro ao processar sua solicitação.");
+    return NextResponse.json({ error: "Processing failed" }, { status: 500 });
+  }
 }
 
 async function handleButtonReply(button: any, session: any) {
   const userPhone = session.user_phone;
   console.log(`[WEBHOOK] 🔘 Button pressed: ${button.id}`);
 
-  switch (button.id) {
-    case "sair":
-      await supabase.from("sessions").delete().eq("user_phone", userPhone);
-      await sendTextMessage(userPhone, "👋 Até logo!");
-      break;
+  try {
+    switch (button.id) {
+      case "sair":
+        await clearSession(userPhone);
+        await sendTextMessage(userPhone, "👋 Até logo!");
+        break;
 
-    case "gerar_site":
-    case "editar_site":
-      const action = button.id === "editar_site" ? "editar" : "gerar";
-      await supabase
-        .from("sessions")
-        .update({ action, step: "aguardando_prompt" })
-        .eq("user_phone", userPhone);
-      
-      await sendTextMessage(
-        userPhone,
-        action === "editar" 
-          ? "✏️ O que deseja editar no seu site?" 
-          : "📝 Descreva seu site (ex: 'Site para minha loja de roupas')"
-      );
-      break;
+      case "gerar_site":
+      case "editar_site":
+        const action = button.id === "editar_site" ? "editar" : "gerar";
+        
+        if (!validateTransition(session.step, "aguardando_prompt")) {
+          throw new Error(`Invalid transition from ${session.step} to aguardando_prompt`);
+        }
+
+        await updateSession(userPhone, {
+          action,
+          step: "aguardando_prompt",
+          invalidsent: false
+        });
+        
+        await sendTextMessage(
+          userPhone,
+          action === "editar" 
+            ? "✏️ O que deseja editar no seu site?" 
+            : "📝 Descreva seu site (ex: 'Site para minha loja de roupas')"
+        );
+        break;
+    }
+
+    return NextResponse.json({}, { status: 200 });
+
+  } catch (error) {
+    console.error("[WEBHOOK] 🔴 Button handler error:", error);
+    await updateSession(userPhone, {
+      step: "erro"
+    });
+    await sendTextMessage(userPhone, "❌ Ocorreu um erro ao processar sua ação.");
+    return NextResponse.json({ error: "Button processing failed" }, { status: 500 });
   }
-
-  return NextResponse.json({}, { status: 200 });
 }
 
-// 7. Funções Auxiliares
+// Função auxiliar mantida
 async function getLastProjectId(userPhone: string): Promise<string | null> {
   const { data } = await supabase
     .from("requests")
