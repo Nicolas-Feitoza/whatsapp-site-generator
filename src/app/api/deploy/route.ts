@@ -10,8 +10,8 @@ import { sendTextMessage, sendImageMessage } from "@/utils/whatsapp";
 const DEPLOYMENT_TIMEOUTS = {
   // Tempos base (em ms)
   templateGeneration: {
-    simple: 3 * 60 * 1000,    // 3 min para sites simples
-    complex: 10 * 60 * 1000,  // 10 min para sites complexos
+    simple: 8 * 60 * 1000,    // 8 min para sites simples
+    complex: 15 * 60 * 1000,  // 15 min para sites complexos
     default: 5 * 60 * 1000    // 5 min padrão
   },
   vercelDeploy: {
@@ -19,7 +19,7 @@ const DEPLOYMENT_TIMEOUTS = {
     complex: 8 * 60 * 1000,   // 8 min
     default: 4 * 60 * 1000    // 4 min padrão
   },
-  maxRetries: 3,              // Máximo de tentativas
+  maxRetries: 2,              // Máximo de tentativas
   retryDelay: 30 * 1000       // 30s entre tentativas
 };
 
@@ -68,7 +68,8 @@ export async function POST(request: Request) {
         { milliseconds: templateGenerationTimeout }
       ),
       DEPLOYMENT_TIMEOUTS.maxRetries,
-      DEPLOYMENT_TIMEOUTS.retryDelay
+      DEPLOYMENT_TIMEOUTS.retryDelay,
+      'Template generation'
     );
 
     console.log("[DEPLOY] ✅ Template generated (length:", templateCode.length, ")");
@@ -83,7 +84,8 @@ export async function POST(request: Request) {
         { milliseconds: vercelDeployTimeout }
       ),
       DEPLOYMENT_TIMEOUTS.maxRetries,
-      DEPLOYMENT_TIMEOUTS.retryDelay
+      DEPLOYMENT_TIMEOUTS.retryDelay,
+      'Template Deployment'
     );
 
     const vercelUrl = deployed?.url;
@@ -173,12 +175,14 @@ function determineComplexity(prompt: string): Complexity {
   // Heurística simples baseada no tamanho e palavras-chave
   const complexKeywords = [
     'ecommerce', 'loja online', 'dashboard', 'aplicativo', 
-    'sistema', 'plataforma', 'multi', 'várias', 'complex'
+    'sistema', 'plataforma', 'multi', 'várias', 'complex',
+    'banco de dados', 'login', 'cadastro', 'pagamento'
   ];
 
   const isComplex = 
-    prompt.length > 500 || 
-    complexKeywords.some(kw => prompt.toLowerCase().includes(kw));
+    prompt.length > 300 || 
+    complexKeywords.some(kw => prompt.toLowerCase().includes(kw)) ||
+    prompt.split(' ').length > 50;
 
   return isComplex ? 'complex' : 'simple';
 }
@@ -186,7 +190,8 @@ function determineComplexity(prompt: string): Complexity {
 async function withRetry<T>(
   fn: () => Promise<T>,
   maxRetries: number,
-  delayMs: number
+  delayMs: number,
+  operationName: string
 ): Promise<T> {
   let attempt = 0;
   let lastError: Error | null = null;
@@ -194,18 +199,21 @@ async function withRetry<T>(
   while (attempt < maxRetries) {
     attempt++;
     try {
-      return await fn();
+      const result = await fn();
+      console.log(`[DEPLOY] ✅ ${operationName} succeeded on attempt ${attempt}`);
+      return result;
     } catch (error) {
       // Garante que o erro seja do tipo Error
       lastError = error instanceof Error ? error : new Error(String(error));
       console.log(`[DEPLOY] 🔄 Tentativa ${attempt} falhou, tentando novamente...`);
 
       if (attempt < maxRetries) {
+        console.log(`[DEPLOY] ⏳ Waiting ${delayMs/1000}s before retry...`);
         await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
       }
     }
   }
-
+  console.log(`[DEPLOY] ❌ ${operationName} failed after ${maxRetries} attempts`);
   // Garante que lastError não seja null ao lançar
   throw lastError ?? new Error("Unknown error occurred during retry.");
 }
