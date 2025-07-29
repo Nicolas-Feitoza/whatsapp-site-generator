@@ -9,39 +9,49 @@ let cachedToken: string | null = null;
 let tokenExpiry: number = 0;
 
 async function refreshAccessToken(): Promise<void> {
-  const res = await fetch('https://graph.facebook.com/oauth/access_token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      grant_type: 'client_credentials',
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-    }),
-  });
+  try {
+    const res = await fetch('https://graph.facebook.com/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        grant_type: 'client_credentials',
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+      }),
+    });
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Erro ao obter token: ${err}`);
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Token refresh failed: ${err}`);
+    }
+
+    const rawdata = await res.json();
+    const data = assertValidTokenResponse(rawdata);
+    cachedToken = data.access_token;
+    tokenExpiry = Date.now() + ((data.expires_in || 3600) * 1000);
+    console.log('[WHATSAPP] Token refreshed, expires at:', new Date(tokenExpiry));
+  } catch (error) {
+    console.error('[WHATSAPP] Token refresh error:', error);
+    cachedToken = null;
+    tokenExpiry = 0;
+    throw error;
   }
-
-  const rawdata = await res.json();
-  const data = assertValidTokenResponse(rawdata);
-  cachedToken = data.access_token;
-  tokenExpiry = Math.floor(Date.now() / 1000) + (data.expires_in || 3600);
 }
 
 async function getAccessToken(): Promise<string> {
-  const now = Math.floor(Date.now() / 1000);
-  
-  if (!cachedToken || now >= tokenExpiry - 60) {
-    try {
-      await refreshAccessToken();
-    } catch (error) {
-      return process.env.WHATSAPP_TOKEN || "";
-    }
+  // Use cached token if valid
+  if (cachedToken && Date.now() < tokenExpiry - 60000) {
+    return cachedToken;
   }
-  
-  return cachedToken!;
+
+  // Fallback to env token if refresh fails
+  try {
+    await refreshAccessToken();
+    return cachedToken!;
+  } catch (error) {
+    console.error('[WHATSAPP] Using fallback token');
+    return process.env.WHATSAPP_TOKEN || "";
+  }
 }
 
 export const sendTextMessage = async (to: string, text: string) => {

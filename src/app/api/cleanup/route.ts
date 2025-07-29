@@ -3,10 +3,10 @@ import { NextResponse } from 'next/server';
 
 // Configurações ajustáveis
 const CLEANUP_SETTINGS = {
-  expirationTime: 24 * 60 * 60 * 1000, // 24 horas em ms
-  batchSize: 10, // Número máximo de projetos para processar por execução
-  retryCount: 3, // Tentativas de exclusão
-  retryDelay: 2000 // Delay entre tentativas em ms
+  expirationTime: 24 * 60 * 60 * 1000, // 24 hours
+  batchSize: 20, // Increased batch size
+  retryCount: 5, // Increased retry count
+  retryDelay: 3000 // 3s between retries
 };
 
 export const config = {
@@ -86,58 +86,65 @@ async function processCleanupBatch(requests: any[]) {
     let success = false;
     let error = null;
 
-    // Verificar se há requests ativas para este projeto
-    const { count: activeCount } = await supabase
-      .from('requests')
-      .select('*', { count: 'exact' })
-      .eq('project_id', req.project_id)
-      .not('status', 'in', '("expired", "failed")');
-
-      if ((activeCount ?? 0) > 0) {
-        // Se for null, trata como zero
-        results.push({
-          requestId: req.id,
-          projectId: req.project_id,
-          success: false,
-          reason: 'Projeto tem requests ativas'
-        });
-        continue;
-      }      
-
-    // Tentar deletar com retry
+    // Check for active requests with exponential backoff
     while (attempt < CLEANUP_SETTINGS.retryCount && !success) {
       attempt++;
       try {
-        console.log(`[CLEANUP] 🚀 Tentativa ${attempt} para ${req.project_id}`);
+        const { count: activeCount } = await supabase
+          .from('requests')
+          .select('*', { count: 'exact' })
+          .eq('project_id', req.project_id)
+          .not('status', 'in', '("expired", "failed")')
+          .gt('updated_at', new Date(Date.now() - CLEANUP_SETTINGS.expirationTime).toISOString());
 
-        // Verificar se o projeto existe antes de deletar
+        if ((activeCount ?? 0) > 0) {
+          results.push({
+            requestId: req.id,
+            projectId: req.project_id,
+            success: false,
+            reason: 'Projeto tem requests ativas'
+          });
+          break;
+        }
+
+        // Verify project exists before deletion
         const projectExists = await checkProjectExists(req.project_id);
         if (!projectExists) {
           success = true;
-          error = 'Projeto não existe na Vercel';
+          results.push({
+            requestId: req.id,
+            projectId: req.project_id,
+            success: true,
+            reason: 'Projeto não existe na Vercel'
+          });
           break;
         }
 
         await deleteVercelProject(req.project_id);
         success = true;
+        results.push({
+          requestId: req.id,
+          projectId: req.project_id,
+          success: true,
+          attempt
+        });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        error = message;
-      
+        error = err instanceof Error ? err.message : String(err);
         if (attempt < CLEANUP_SETTINGS.retryCount) {
-          await new Promise(r => setTimeout(r, CLEANUP_SETTINGS.retryDelay));
+          await new Promise(r => setTimeout(r, CLEANUP_SETTINGS.retryDelay * attempt));
         }
       }
-      
     }
 
-    results.push({
-      requestId: req.id,
-      projectId: req.project_id,
-      success,
-      attempt,
-      error: error || undefined
-    });
+    if (!success) {
+      results.push({
+        requestId: req.id,
+        projectId: req.project_id,
+        success: false,
+        attempt,
+        error: error || 'Max retries reached'
+      });
+    }
   }
 
   return results;

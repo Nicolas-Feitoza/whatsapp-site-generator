@@ -8,19 +8,18 @@ import { sendTextMessage, sendImageMessage } from "@/utils/whatsapp";
 
 // Configurações de timeout ajustáveis
 const DEPLOYMENT_TIMEOUTS = {
-  // Tempos base (em ms)
   templateGeneration: {
-    simple: 8 * 60 * 1000,    // 8 min para sites simples
-    complex: 15 * 60 * 1000,  // 15 min para sites complexos
-    default: 5 * 60 * 1000    // 5 min padrão
+    simple: 10 * 60 * 1000,    // 10 min for simple sites
+    complex: 20 * 60 * 1000,   // 20 min for complex sites
+    default: 15 * 60 * 1000    // 15 min default
   },
   vercelDeploy: {
-    simple: 3 * 60 * 1000,    // 3 min
-    complex: 8 * 60 * 1000,   // 8 min
-    default: 4 * 60 * 1000    // 4 min padrão
+    simple: 5 * 60 * 1000,     // 5 min
+    complex: 10 * 60 * 1000,   // 10 min
+    default: 8 * 60 * 1000     // 8 min default
   },
-  maxRetries: 2,              // Máximo de tentativas
-  retryDelay: 30 * 1000       // 30s entre tentativas
+  maxRetries: 3,               // Increased max retries
+  retryDelay: 30 * 1000        // 30s between retries
 };
 
 // Tipos de complexidade
@@ -75,6 +74,7 @@ export async function POST(request: Request) {
     console.log("[DEPLOY] ✅ Template generated (length:", templateCode.length, ")");
 
     // 4) Deploy to Vercel
+    // 4) Deploy to Vercel
     console.log("[DEPLOY] 🚀 Deploying to Vercel…");
     const vercelDeployTimeout = DEPLOYMENT_TIMEOUTS.vercelDeploy[complexity];
     
@@ -89,10 +89,18 @@ export async function POST(request: Request) {
     );
 
     const vercelUrl = deployed?.url;
-    if (!deployed?.url) {
+    if (!vercelUrl) {
       throw new Error("Vercel deployment failed: missing URL.");
     }
-    console.log("[DEPLOY] ✅ Deployed at", vercelUrl);
+
+    // Verify deployment is accessible
+    try {
+      await verifyDeployment(vercelUrl);
+      console.log("[DEPLOY] ✅ Verified deployment at", vercelUrl);
+    } catch (verifyError) {
+      console.error("[DEPLOY] 🔴 Deployment verification failed:", verifyError);
+      throw new Error("Deployed site is not accessible");
+    }
 
     // 5) Thumbnail handling
     const { data: prev, error: thumbPrevErr } = await supabase
@@ -246,5 +254,24 @@ async function handleDeploymentError(requestId: string, error: Error) {
 
     await sendTextMessage(row.user_phone, message)
       .catch(e => console.error("[DEPLOY] 🔴 sendTextMessage error:", e));
+  }
+}
+
+async function verifyDeployment(url: string): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const response = await fetch(url, { 
+      signal: controller.signal 
+    });
+    clearTimeout(timeout);
+    
+    if (response.status !== 200) {
+      throw new Error(`Deployment verification failed: ${response.status}`);
+    }
+  } catch (error) {
+    clearTimeout(timeout);
+    throw new Error(`Failed to verify deployment: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

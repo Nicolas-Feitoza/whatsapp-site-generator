@@ -50,42 +50,49 @@ export async function captureThumbnail(url: string): Promise<string> {
   return THUMBNAIL_CONFIG.placeholderUrl;
 }
 
-async function tryCaptureWithService(url: string, service: any): Promise<string> {
-  const params = new URLSearchParams();
-  
-  // Adicionar parâmetros específicos do serviço
-  Object.entries(service.params).forEach(([key, value]) => {
-    params.append(key, String(value));
-  });
-
-  params.append('url', encodeURIComponent(url));
-
-  // Adicionar chave de API se existir
-  if (service.authKey) {
-    params.append('access_key', service.authKey);
-  }
-
-  const apiUrl = `${service.url}?${params.toString()}`;
-  
-  // Fazer a requisição com timeout
+async function isUrlAccessible(url: string): Promise<boolean> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
+  
+  try {
+    const response = await fetch(url, { 
+      method: 'HEAD',
+      signal: controller.signal 
+    });
+    
+    clearTimeout(timeout);
+    return response.status === 200;
+  } catch (error) {
+    clearTimeout(timeout);
+    console.error('[THUMBNAIL] URL accessibility check failed:', error);
+    return false;
+  }
+}
+
+async function tryCaptureWithService(url: string, service: any): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
 
   try {
-    const response = await fetch(apiUrl, { signal: controller.signal });
+    const response = await fetch(`${service.url}?${new URLSearchParams({
+      ...service.params,
+      url: encodeURIComponent(url),
+      ...(service.authKey ? { access_key: service.authKey } : {})
+    })}`, { 
+      signal: controller.signal
+    });
+    
     clearTimeout(timeout);
 
     if (!response.ok) {
       throw new Error(`API returned ${response.status}`);
     }
 
-    // Se for Microlink, a resposta é JSON
     if (service.name === 'microlink') {
       const data = await response.json();
       return data.data.screenshot.url;
     }
 
-    // Para ScreenshotOne, a resposta é a imagem diretamente
     const blob = await response.blob();
     return await uploadToSupabase(blob, url);
   } catch (error) {
