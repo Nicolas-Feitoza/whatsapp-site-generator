@@ -5,7 +5,7 @@ interface ValidationResult {
   }
   
   export function validateSitePrompt(prompt: string): ValidationResult {
-    if (!prompt || prompt.trim().length < 10) {
+    if (prompt.trim().length < 10) {
       return {
         isValid: false,
         reason: "Mensagem muito curta. Por favor, descreva melhor seu site."
