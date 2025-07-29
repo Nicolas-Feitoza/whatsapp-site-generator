@@ -4,85 +4,40 @@ interface VercelDeployment {
   id: string;
   readyState: string;
   projectId: string;
-  alias: string[];
 }
-
-const DEPLOY_SETTINGS = {
-  maxRetries: 3,
-  retryDelay: 30000,
-  deploymentTimeout: 180000
-};
 
 export const deployOnVercel = async (
   htmlContent: string,
   projectId: string | null,
   userPhone: string
 ): Promise<{ url: string; projectId: string }> => {
-  const aliasName = generateAlias(userPhone);
-  const fullHtml = ensureCompleteHtml(htmlContent);
-
-  for (let attempt = 1; attempt <= DEPLOY_SETTINGS.maxRetries; attempt++) {
-    try {
-      const deployment = await createDeployment(fullHtml, projectId);
-      await assignAlias(deployment.id, aliasName);
-      
-      return {
-        url: `https://${aliasName}.vercel.app`,
-        projectId: deployment.projectId
-      };
-    } catch (error) {
-      console.error(`[DEPLOY] Attempt ${attempt} failed:`, error);
-      if (attempt < DEPLOY_SETTINGS.maxRetries) {
-        await new Promise(r => setTimeout(r, DEPLOY_SETTINGS.retryDelay));
-      }
-    }
-  }
-
-  throw new Error('Deployment failed after all retries');
-};
-
-// Funções auxiliares
-function generateAlias(phone: string): string {
-  const cleanPhone = phone.replace(/\D/g, '').slice(-8);
-  return `site-${cleanPhone}-${Date.now().toString(36)}`;
-}
-
-function ensureCompleteHtml(content: string): string {
-  const hasHtmlTag = content.includes('<html') && content.includes('<head');
-  if (hasHtmlTag) return content;
+  // Garantir que o HTML tenha a estrutura mínima necessária
+  const completeHtml = ensureCompleteHtml(htmlContent);
   
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  ${content.includes('<title>') ? '' : '<title>Site Gerado</title>'}
-</head>
-${content.includes('<body>') ? content : `<body>${content}</body>`}
-</html>`;
-}
+  // Criar um nome único para o deployment
+  const aliasName = `site-${userPhone.replace(/\D/g, '').slice(-8)}-${Date.now().toString(36)}`;
 
-async function createDeployment(html: string, projectId: string | null): Promise<VercelDeployment> {
+  // Configuração do deployment
   const body = {
     name: `site-${Date.now()}`,
-    target: 'production',
-    public: true, // Garante que o deployment seja público
-    files: [{ file: '/index.html', data: html }],
-    builds: [{ src: 'index.html', use: '@vercel/static' }],
-    routes: [{ src: '/(.*)', dest: '/index.html' }],
+    target: "production",
+    public: true, // Isso é CRUCIAL para evitar tela de login
+    files: [{ file: "/index.html", data: completeHtml }],
+    builds: [{ src: "index.html", use: "@vercel/static" }],
+    routes: [{ src: "/(.*)", dest: "/index.html" }],
     projectSettings: {
-      framework: null, // Força projeto estático
+      framework: null, // Forçar site estático
       buildCommand: null,
       outputDirectory: null
-    },
-    ...(projectId && { project: projectId })
+    }
   };
 
-  const res = await fetch('https://api.vercel.com/v13/deployments', {
-    method: 'POST',
+  // Criar o deployment
+  const res = await fetch("https://api.vercel.com/v13/deployments", {
+    method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
   });
@@ -93,47 +48,49 @@ async function createDeployment(html: string, projectId: string | null): Promise
   }
 
   const data = await res.json() as VercelDeployment;
-  await waitForDeployment(data.id);
-  return data;
-}
 
-async function waitForDeployment(deploymentId: string): Promise<void> {
-  const start = Date.now();
-  
-  while (Date.now() - start < DEPLOY_SETTINGS.deploymentTimeout) {
-    const res = await fetch(`https://api.vercel.com/v13/deployments/${deploymentId}`, {
-      headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` },
-    });
-    
-    const deployment = await res.json() as VercelDeployment;
-    
-    if (deployment.readyState === 'READY') return;
-    if (deployment.readyState === 'ERROR') throw new Error('Deployment failed');
-    
-    await new Promise(r => setTimeout(r, 2000));
+  // Criar alias público
+  await createAlias(data.id, aliasName);
+
+  return {
+    url: `https://${aliasName}.vercel.app`,
+    projectId: data.projectId
+  };
+};
+
+// Funções auxiliares
+function ensureCompleteHtml(content: string): string {
+  if (content.includes('<html') && content.includes('<head')) {
+    return content;
   }
-
-  throw new Error('Deployment timeout');
+  
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Site Gerado</title>
+</head>
+<body>${content}</body>
+</html>`;
 }
 
-async function assignAlias(deploymentId: string, alias: string): Promise<void> {
-  const res = await fetch(
-    `https://api.vercel.com/v13/deployments/${deploymentId}/aliases`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ 
-        alias: `${alias}.vercel.app`,
-        // Configurações adicionais para garantir acesso público
-        protectionBypass: { "none": true }
-      }),
-    }
-  );
-
-  if (!res.ok) {
-    console.error('Alias assignment failed:', await res.text());
+async function createAlias(deploymentId: string, alias: string): Promise<void> {
+  try {
+    await fetch(
+      `https://api.vercel.com/v13/deployments/${deploymentId}/aliases`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ 
+          alias: `${alias}.vercel.app`
+        }),
+      }
+    );
+  } catch (error) {
+    console.error("Alias creation error:", error);
   }
 }

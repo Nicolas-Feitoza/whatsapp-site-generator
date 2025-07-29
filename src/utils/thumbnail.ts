@@ -7,14 +7,11 @@ const THUMBNAIL_CONFIG = {
       name: 'screenshotone',
       url: 'https://api.screenshotone.com/take',
       params: {
-        format: 'jpg',
+        format: 'jpeg',
         viewport_width: '1280',
         viewport_height: '720',
         delay: '5',
-        image_quality: '80',
-        block_cookie_banners: 'true',
-        block_trackers: 'true',
-        timeout: '30'
+        image_quality: '80'
       },
       authKey: process.env.SCREENSHOTONE_ACCESS_KEY
     },
@@ -26,104 +23,94 @@ const THUMBNAIL_CONFIG = {
         meta: 'false',
         viewport_width: '1280',
         viewport_height: '720',
-        wait_for: '5000',
-        timeout: '30000'
+        wait_for: '5000'
       }
     }
   ],
-  maxAttempts: 2,
-  placeholderUrl: 'https://via.placeholder.com/1280x720.png?text=Preview+Indispon%C3%ADvel',
-  storagePath: 'public/thumbnails'
+  placeholderUrl: 'https://via.placeholder.com/1280x720.png?text=Site+Preview'
 };
 
-export async function captureThumbnail(targetUrl: string): Promise<string> {
-  // Verificar se já existe thumbnail para esta URL
-  const existingThumb = await checkExistingThumbnail(targetUrl);
-  if (existingThumb) return existingThumb;
+export async function captureThumbnail(url: string): Promise<string> {
+  // Verificar se a URL é válida
+  if (!url || !url.startsWith('http')) {
+    return THUMBNAIL_CONFIG.placeholderUrl;
+  }
 
   for (const service of THUMBNAIL_CONFIG.services) {
     try {
-      const imageBuffer = await captureWithService(targetUrl, service);
-      if (imageBuffer) {
-        return await storeThumbnail(targetUrl, imageBuffer);
+      const imageUrl = await tryCaptureWithService(url, service);
+      if (imageUrl) {
+        return imageUrl;
       }
     } catch (error) {
-      console.error(`[THUMBNAIL] ${service.name} failed:`, error instanceof Error ? error.message : String(error));
+      console.error(`[THUMBNAIL] ${service.name} error:`, error);
     }
   }
 
-  console.warn('[THUMBNAIL] All capture services failed, using placeholder');
   return THUMBNAIL_CONFIG.placeholderUrl;
 }
 
-async function checkExistingThumbnail(url: string): Promise<string | null> {
-  const urlHash = createHash('sha256').update(url).digest('hex');
-  const fileName = `${THUMBNAIL_CONFIG.storagePath}/${urlHash}.jpg`;
-
-  try {
-    const { data } = await supabase
-      .storage
-      .from('thumbnails')
-      .getPublicUrl(fileName);
-
-    // Verificar se a imagem existe
-    const checkResponse = await fetch(data.publicUrl);
-    if (checkResponse.ok) {
-      return data.publicUrl;
-    }
-  } catch (error) {
-    console.error('[THUMBNAIL] Existing thumbnail check failed:', error);
-  }
-  return null;
-}
-
-async function captureWithService(url: string, service: typeof THUMBNAIL_CONFIG.services[0]): Promise<Buffer> {
+async function tryCaptureWithService(url: string, service: any): Promise<string> {
   const params = new URLSearchParams();
   
-  // Adicionar parâmetros dinamicamente
+  // Adicionar parâmetros específicos do serviço
   Object.entries(service.params).forEach(([key, value]) => {
-    if (value !== undefined) {
-      params.append(key, String(value));
-    }
+    params.append(key, String(value));
   });
 
   params.append('url', encodeURIComponent(url));
 
+  // Adicionar chave de API se existir
   if (service.authKey) {
     params.append('access_key', service.authKey);
   }
 
   const apiUrl = `${service.url}?${params.toString()}`;
+  
+  // Fazer a requisição com timeout
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const timeout = setTimeout(() => controller.abort(), 10000);
 
   try {
-    const response = await fetch(apiUrl, { 
-      signal: controller.signal 
-    });
-    clearTimeout(timeoutId);
-    return Buffer.from(await response.arrayBuffer());
+    const response = await fetch(apiUrl, { signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      throw new Error(`API returned ${response.status}`);
+    }
+
+    // Se for Microlink, a resposta é JSON
+    if (service.name === 'microlink') {
+      const data = await response.json();
+      return data.data.screenshot.url;
+    }
+
+    // Para ScreenshotOne, a resposta é a imagem diretamente
+    const blob = await response.blob();
+    return await uploadToSupabase(blob, url);
   } catch (error) {
-    clearTimeout(timeoutId);
+    clearTimeout(timeout);
     throw error;
-  } 
+  }
 }
 
-async function storeThumbnail(url: string, buffer: Buffer): Promise<string> {
-  const urlHash = createHash('sha256').update(url).digest('hex');
-  const fileName = `${THUMBNAIL_CONFIG.storagePath}/${urlHash}.jpg`;
+async function uploadToSupabase(blob: Blob, originalUrl: string): Promise<string> {
+  const urlHash = createHash('sha256').update(originalUrl).digest('hex');
+  const fileName = `public/thumbnails/${urlHash}.jpg`;
+  const arrayBuffer = await blob.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
 
   const { error } = await supabase
     .storage
     .from('thumbnails')
     .upload(fileName, buffer, {
       contentType: 'image/jpeg',
-      cacheControl: 'public, max-age=2592000',
+      cacheControl: 'public, max-age=2592000', // 30 dias
       upsert: true
     });
 
   if (error) {
-    throw new Error(`Storage upload failed: ${error.message}`);
+    throw error;
   }
 
   return `${process.env.SUPABASE_URL}/storage/v1/object/public/thumbnails/${fileName}`;
