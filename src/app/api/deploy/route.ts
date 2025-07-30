@@ -14,170 +14,74 @@ const DEPLOYMENT_TIMEOUTS = {
     default: 15 * 60 * 1000    // 15 min default
   },
   vercelDeploy: {
-    simple: 5 * 60 * 1000,     // 5 min
-    complex: 10 * 60 * 1000,   // 10 min
-    default: 8 * 60 * 1000     // 8 min default
+    simple: 8 * 60 * 1000,    // 8 minutes
+    complex: 15 * 60 * 1000,  // 15 minutes
+    default: 10 * 60 * 1000   // 10 minutes
   },
-  maxRetries: 3,               // Increased max retries
+  maxRetries: 2,              // Reduced to 2 retries
   retryDelay: (attempt: number) => 
-    Math.min(attempt * 10000, 60000)        // 30s between retries
+    Math.min(attempt * 15000, 45000) // Slower backoff (15s, 30s, 45s)
 };
 
 // Tipos de complexidade
 type Complexity = 'simple' | 'complex';
 
 export async function POST(request: Request) {
-  let requestId: string | undefined;
-
+  const { id } = await request.json();
+  
   try {
-    const { id } = (await request.json()) as { id: string };
-    requestId = id;
-    console.log(`\n[DEPLOY] 🚀 Starting deploy for request id=${id}`);
-
-    // 1) Mark request as processing
-    console.log(`[DEPLOY] Processando request`);
-    const { error: markProcErr } = await supabase
-      .from("requests")
-      .update({ 
-        status: "processing", 
-        updated_at: new Date().toISOString(),
-        attempts: (await getCurrentAttempts(id)) + 1
-      })
-      .eq("id", id);
-    if (markProcErr) console.error("[DEPLOY] 🔴 Mark processing error:", markProcErr);
-
-    // 2) Fetch request row
-    const { data: siteRequest, error: fetchReqErr } = await supabase
+    // 1. Buscar request no Supabase
+    const { data: siteRequest } = await supabase
       .from("requests")
       .select("*")
       .eq("id", id)
       .single();
-    if (fetchReqErr) throw fetchReqErr;
-    console.log("[DEPLOY] 🗂️ Request row:", siteRequest);
 
-    // 3. Determinar complexidade
-    const complexity = determineComplexity(siteRequest.prompt);
-    console.log(`[DEPLOY] 🧠 Complexidade: ${complexity}`);
+    // 2. Gerar template
+    const template = await generateTemplate(siteRequest.prompt);
 
-    // 4. Gerar template com timeout dinâmico
-    console.log("[DEPLOY] 🧠 Generating template via AI…");
-    const templateGenerationTimeout = DEPLOYMENT_TIMEOUTS.templateGeneration[complexity];
-    
-    const templateCode = await withRetry(
-      () => pTimeout(
-        generateTemplate(siteRequest.prompt),
-        { milliseconds: templateGenerationTimeout }
-      ),
-      DEPLOYMENT_TIMEOUTS.maxRetries,
-      DEPLOYMENT_TIMEOUTS.retryDelay,
-      'Template generation'
-    );
+    // 3. Fazer deploy (1 tentativa apenas)
+    const url = await deployOnVercel(template, siteRequest.user_phone);
 
-    console.log("[DEPLOY] ✅ Template generated (length:", templateCode.length, ")");
-
-    // 4) Deploy to Vercel
-    console.log("[DEPLOY] 🚀 Deploying to Vercel…");
-    const vercelDeployTimeout = DEPLOYMENT_TIMEOUTS.vercelDeploy[complexity];
-    
-    const deployed = await withRetry(
-      async (attempt) => {
-        try {
-          const result = await pTimeout(
-            deployOnVercel(templateCode, siteRequest.project_id, siteRequest.user_phone),
-            { milliseconds: vercelDeployTimeout }
-          );
-          return result;
-        } catch (error) {
-          console.error(`Deployment attempt ${attempt} failed:`, error);
-          throw error;
-        }
-      },
-      DEPLOYMENT_TIMEOUTS.maxRetries,
-      DEPLOYMENT_TIMEOUTS.retryDelay,
-      'Template Deployment'
-    );
-
-    const vercelUrl = deployed?.url;
-    if (!vercelUrl) {
-      throw new Error("Vercel deployment failed: missing URL.");
-    }
-
-    // Verify deployment is accessible
-    try {
-      await verifyDeployment(vercelUrl);
-      console.log("[DEPLOY] ✅ Verified deployment at", vercelUrl);
-    } catch (verifyError) {
-      console.error("[DEPLOY] 🔴 Deployment verification failed:", verifyError);
-      throw new Error("Deployed site is not accessible");
-    }
-
-    // 5) Thumbnail handling
-    console.log(`[DEPLOY] Lidando com a thumbnail`);
-    const { data: prev, error: thumbPrevErr } = await supabase
-      .from("requests") 
-      .select("thumbnail_url, updated_at")
-      .eq("vercel_url", vercelUrl)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .single();
-    if (thumbPrevErr) console.error("[DEPLOY] 🔴 Thumb prev fetch error:", thumbPrevErr);
-
-    let thumbnailUrl = prev?.thumbnail_url;
-    const tooOld = prev && Date.now() - new Date(prev.updated_at).getTime() > 24 * 60 * 60_000;
-
-    if (!thumbnailUrl || tooOld) {
-      console.log("[DEPLOY] 📸 Capturando novo thumbnail...");
-      try {
-        thumbnailUrl = await captureThumbnail(vercelUrl);
-        console.log("[DEPLOY] ✅ Thumbnail capturado:", thumbnailUrl);
-      } catch (error) {
-        console.error("[DEPLOY] 🔴 Erro no thumbnail:", error);
-      }
-    }
-
-    // 6) Update request with projectId
-    console.log("[DEPLOY] Processo finalizado");
-    const { error: updReqErr } = await supabase
+    // 4. Atualizar status
+    await supabase
       .from("requests")
-      .update({
+      .update({ 
         status: "completed",
-        vercel_url: vercelUrl,
-        thumbnail_url: thumbnailUrl,
-        project_id: deployed.projectId, // Store projectId
-        updated_at: new Date().toISOString(),
+        vercel_url: url,
+        updated_at: new Date().toISOString()
       })
       .eq("id", id);
-    if (updReqErr) console.error("[DEPLOY] 🔴 Update request error:", updReqErr);
 
-    // 7) Notify user
-    if (thumbnailUrl) {
-      await sendImageMessage(siteRequest.user_phone, thumbnailUrl)
-        .catch(err => console.error("[DEPLOY] 🔴 sendImageMessage error:", err));
-    }
-
+    // 5. Notificar usuário
     await sendTextMessage(
       siteRequest.user_phone,
-      `✅ Seu site está pronto!\n\n🌐 ${vercelUrl}\n(Link válido por 24h)`
-    ).catch(err => console.error("[DEPLOY] 🔴 sendTextMessage error:", err));
+      `✅ Site pronto!\n${url}`
+    );
 
-    console.log("[DEPLOY] 🎉 Finished successfully");
     return NextResponse.json({ success: true });
-  } catch (err: any) {
-    console.error("[DEPLOY] 🔴 Caught error:", {
-      message: err.message,
-      stack: err.stack,
-      response: err.response?.data
-    });
-
-    if (requestId) {
-      await handleDeploymentError(requestId, err);
-    }
-
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+          ? error
+          : JSON.stringify(error);
+  
+    await supabase
+      .from("requests")
+      .update({ 
+        status: "failed",
+        error: message.slice(0, 500),
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", id);
+  
     return NextResponse.json(
-      { error: (err && err.message) || "Unknown error" },
+      { error: message },
       { status: 500 }
     );
-  }
+  }  
 }
 
 async function getCurrentAttempts(requestId: string): Promise<number> {
