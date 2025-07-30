@@ -86,9 +86,6 @@ export async function POST(request: Request) {
             deployOnVercel(templateCode, siteRequest.project_id, siteRequest.user_phone),
             { milliseconds: vercelDeployTimeout }
           );
-          
-          // Additional verification
-          await verifyDeployment(result.url);
           return result;
         } catch (error) {
           console.error(`Deployment attempt ${attempt} failed:`, error);
