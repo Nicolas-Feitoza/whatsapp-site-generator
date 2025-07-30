@@ -14,12 +14,13 @@ const DEPLOYMENT_TIMEOUTS = {
     default: 15 * 60 * 1000    // 15 min default
   },
   vercelDeploy: {
-    simple: 10 * 60 * 1000,     // 5 min
-    complex: 20 * 60 * 1000,   // 10 min
-    default: 16 * 60 * 1000     // 8 min default
+    simple: 5 * 60 * 1000,     // 5 min
+    complex: 10 * 60 * 1000,   // 10 min
+    default: 8 * 60 * 1000     // 8 min default
   },
   maxRetries: 3,               // Increased max retries
-  retryDelay: 30 * 1000        // 30s between retries
+  retryDelay: (attempt: number) => 
+    Math.min(attempt * 10000, 60000)        // 30s between retries
 };
 
 // Tipos de complexidade
@@ -79,10 +80,21 @@ export async function POST(request: Request) {
     const vercelDeployTimeout = DEPLOYMENT_TIMEOUTS.vercelDeploy[complexity];
     
     const deployed = await withRetry(
-      () => pTimeout(
-        deployOnVercel(templateCode, siteRequest.project_id, siteRequest.user_phone),
-        { milliseconds: vercelDeployTimeout }
-      ),
+      async (attempt) => {
+        try {
+          const result = await pTimeout(
+            deployOnVercel(templateCode, siteRequest.project_id, siteRequest.user_phone),
+            { milliseconds: vercelDeployTimeout }
+          );
+          
+          // Additional verification
+          await verifyDeployment(result.url);
+          return result;
+        } catch (error) {
+          console.error(`Deployment attempt ${attempt} failed:`, error);
+          throw error;
+        }
+      },
       DEPLOYMENT_TIMEOUTS.maxRetries,
       DEPLOYMENT_TIMEOUTS.retryDelay,
       'Template Deployment'
@@ -196,9 +208,9 @@ function determineComplexity(prompt: string): Complexity {
 }
 
 async function withRetry<T>(
-  fn: () => Promise<T>,
+  fn: (attempt: number) => Promise<T>,
   maxRetries: number,
-  delayMs: number,
+  getDelay: (attempt: number) => number,
   operationName: string
 ): Promise<T> {
   let attempt = 0;
@@ -207,23 +219,23 @@ async function withRetry<T>(
   while (attempt < maxRetries) {
     attempt++;
     try {
-      const result = await fn();
+      const result = await fn(attempt);
       console.log(`[DEPLOY] ✅ ${operationName} succeeded on attempt ${attempt}`);
       return result;
     } catch (error) {
-      // Garante que o erro seja do tipo Error
       lastError = error instanceof Error ? error : new Error(String(error));
-      console.log(`[DEPLOY] 🔄 Tentativa ${attempt} falhou, tentando novamente...`);
+      console.log(`[DEPLOY] 🔄 Attempt ${attempt} failed: ${lastError.message}`);
 
       if (attempt < maxRetries) {
-        console.log(`[DEPLOY] ⏳ Waiting ${delayMs/1000}s before retry...`);
-        await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+        const delay = getDelay(attempt);
+        console.log(`[DEPLOY] ⏳ Waiting ${delay}ms before retry...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
   }
+
   console.log(`[DEPLOY] ❌ ${operationName} failed after ${maxRetries} attempts`);
-  // Garante que lastError não seja null ao lançar
-  throw lastError ?? new Error("Unknown error occurred during retry.");
+  throw lastError ?? new Error(`${operationName} failed after ${maxRetries} attempts`);
 }
 
 

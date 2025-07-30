@@ -34,22 +34,28 @@ export const deployOnVercel = async (
     }
   };
 
-  // Create deployment
-  const deployment = await createDeployment(body);
-  
-  // Wait for deployment to be ready
-  await waitUntilDeploymentReady(deployment.id);
-  
-  // Create alias
-  await createAlias(deployment.id, aliasName);
+  try {
+    console.log('[VERCEL] Creating deployment...');
+    const deployment = await createDeployment(body);
+    
+    console.log('[VERCEL] Waiting for deployment to be ready...');
+    await waitUntilDeploymentReady(deployment.id);
 
-  // Verify deployment is accessible
-  await verifyDeployment(`https://${aliasName}.vercel.app`);
+    console.log('[VERCEL] Creating alias...');
+    await createAlias(deployment.id, aliasName);
 
-  return {
-    url: `https://${aliasName}.vercel.app`,
-    projectId: deployment.projectId
-  };
+    const finalUrl = `https://${aliasName}.vercel.app`;
+    console.log(`[VERCEL] Verifying deployment at ${finalUrl}...`);
+    await verifyDeployment(finalUrl, 10, 10000); // 10 attempts, 10s delay
+
+    return {
+      url: finalUrl,
+      projectId: deployment.projectId
+    };
+  } catch (error) {
+    console.error('[VERCEL] Deployment failed:', error);
+    throw new Error(`Vercel deployment failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
 };
 
 // Helper functions
@@ -91,22 +97,42 @@ async function getDeployment(deploymentId: string): Promise<VercelDeployment> {
   return await res.json();
 }
 
-async function verifyDeployment(url: string): Promise<void> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
+async function verifyDeployment(url: string, maxAttempts = 5, delay = 5000): Promise<void> {
+  let attempt = 0;
+  
+  while (attempt < maxAttempts) {
+    attempt++;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
 
-  try {
-    const response = await fetch(url, { 
-      signal: controller.signal 
-    });
-    clearTimeout(timeout);
-    
-    if (response.status !== 200) {
+    try {
+      console.log(`[VERCEL] Verifying deployment (attempt ${attempt})...`);
+      const response = await fetch(url, { 
+        signal: controller.signal,
+        redirect: 'manual' // Don't follow redirects
+      });
+      clearTimeout(timeout);
+
+      if (response.status === 200) {
+        console.log('[VERCEL] Deployment verified successfully');
+        return;
+      }
+
+      if (response.status === 404 && attempt < maxAttempts) {
+        console.log(`[VERCEL] Deployment not ready yet, waiting ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+
       throw new Error(`Deployment verification failed: ${response.status}`);
+    } catch (error) {
+      clearTimeout(timeout);
+      if (attempt >= maxAttempts) {
+        throw new Error(`Final verification attempt failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      console.log(`[VERCEL] Verification attempt ${attempt} failed, retrying...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
-  } catch (error) {
-    clearTimeout(timeout);
-    throw new Error(`Failed to verify deployment: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
