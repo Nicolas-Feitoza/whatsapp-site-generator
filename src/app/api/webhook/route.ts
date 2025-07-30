@@ -61,18 +61,22 @@ export async function POST(request: Request) {
     });
 
     // 3. Gerenciamento de Sessão Refatorado
+    console.log(`[WEBHOOK] Verificando Sessão`);
     const currentSession = await getSession(userPhone);
 
     // Processamento condicional baseado no estado
     if (currentSession.step === "aguardando_prompt" && message.type === "text") {
+      console.log(`[WEBHOOK] Iniciando processo de criação do site`);
       return await processSiteCreation(message, currentSession);
     }
 
     // 4. Processamento por Tipo de Mensagem
     switch (message.type) {
       case "text":
+        console.log(`[WEBHOOK] Lidando com mensagem de texto: ${message}`);
         return await handleTextMessage(message, currentSession);
       case "interactive":
+        console.log(`[WEBHOOK] Lidando com mensagem interativa: ${message.interactive.button_reply}`);
         if (message.interactive?.type === "button_reply") {
           return await handleButtonReply(message.interactive.button_reply, currentSession);
         }
@@ -117,11 +121,13 @@ async function handleTextMessage(message: any, session: any) {
 }
 
 async function processSiteCreation(message: any, session: any) {
+  console.log(`[WEBHOOK] Criação iniciada`);
   const userPhone = session.user_phone;
   const text = message.text?.body || "";
   const messageId = message.id;
 
   // 1. Verificar se já existe request para esta mensagem
+  console.log(`[WEBHOOK] Verificando se request já existe`);
   const existingRequest = await checkExistingRequest(messageId);
   if (existingRequest) {
     console.log('[WEBHOOK] 🔄 Mensagem já processada anteriormente');
@@ -129,6 +135,7 @@ async function processSiteCreation(message: any, session: any) {
   }
 
   // 2. Validação de prompt
+  console.log(`[WEBHOOK] Validando prompt`);
   const validation = validateSitePrompt(text);
   if (!validation.isValid) {
     if (!session.invalidsent) {
@@ -150,6 +157,7 @@ async function processSiteCreation(message: any, session: any) {
 
   try {
     // 3. Criar solicitação com tratamento de duplicidade
+    console.log(`[WEBHOOK] Criando e tratando request`);
     const request = await createSiteRequest({
       userPhone,
       text,
@@ -158,6 +166,7 @@ async function processSiteCreation(message: any, session: any) {
     });
 
     // 4. Atualizar sessão com upsert
+    console.log(`[WEBHOOK] Atualizando sessão`);
     await updateSession(userPhone, {
       step: "processando",
       metadata: {
@@ -169,6 +178,7 @@ async function processSiteCreation(message: any, session: any) {
     await sendTextMessage(userPhone, "✅ Pedido recebido! Estamos gerando seu site...");
 
     // 5. Disparar deploy
+    console.log(`[WEBHOOK] Enviando para deploy`);
     await triggerDeploy(request.id);
 
     return NextResponse.json({ status: "processing" });

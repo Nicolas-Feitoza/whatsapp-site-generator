@@ -35,6 +35,7 @@ export async function POST(request: Request) {
     console.log(`\n[DEPLOY] 🚀 Starting deploy for request id=${id}`);
 
     // 1) Mark request as processing
+    console.log(`[DEPLOY] Processando request`);
     const { error: markProcErr } = await supabase
       .from("requests")
       .update({ 
@@ -75,7 +76,6 @@ export async function POST(request: Request) {
     console.log("[DEPLOY] ✅ Template generated (length:", templateCode.length, ")");
 
     // 4) Deploy to Vercel
-    // 4) Deploy to Vercel
     console.log("[DEPLOY] 🚀 Deploying to Vercel…");
     const vercelDeployTimeout = DEPLOYMENT_TIMEOUTS.vercelDeploy[complexity];
     
@@ -115,6 +115,7 @@ export async function POST(request: Request) {
     }
 
     // 5) Thumbnail handling
+    console.log(`[DEPLOY] Lidando com a thumbnail`);
     const { data: prev, error: thumbPrevErr } = await supabase
       .from("requests") 
       .select("thumbnail_url, updated_at")
@@ -138,6 +139,7 @@ export async function POST(request: Request) {
     }
 
     // 6) Update request with projectId
+    console.log("[DEPLOY] Processo finalizado");
     const { error: updReqErr } = await supabase
       .from("requests")
       .update({
