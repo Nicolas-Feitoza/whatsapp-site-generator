@@ -14,9 +14,9 @@ const DEPLOYMENT_TIMEOUTS = {
     default: 15 * 60 * 1000    // 15 min default
   },
   vercelDeploy: {
-    simple: 5 * 60 * 1000,     // 5 min
-    complex: 10 * 60 * 1000,   // 10 min
-    default: 8 * 60 * 1000     // 8 min default
+    simple: 10 * 60 * 1000,     // 5 min
+    complex: 20 * 60 * 1000,   // 10 min
+    default: 16 * 60 * 1000     // 8 min default
   },
   maxRetries: 3,               // Increased max retries
   retryDelay: 30 * 1000        // 30s between retries
