@@ -37,29 +37,45 @@ export async function POST(request: Request) {
       .eq("id", id)
       .single();
 
+    if (!siteRequest) throw new Error("Request não encontrado");
+
     // 2. Gerar template
     const template = await generateTemplate(siteRequest.prompt);
 
-    // 3. Fazer deploy (1 tentativa apenas)
+    // 3. Fazer deploy
     const url = await deployOnVercel(template, siteRequest.user_phone);
 
-    // 4. Atualizar status
+    // 4. Capturar thumbnail (aguardar 15s)
+    let thumbnailUrl = 'https://via.placeholder.com/1280x720.png?text=Site+Preview';
+    try {
+      await new Promise(resolve => setTimeout(resolve, 15000));
+      thumbnailUrl = await captureThumbnail(url);
+    } catch (e) {
+      console.error("Erro na thumbnail:", e);
+    }
+
+    // 5. Atualizar status
     await supabase
       .from("requests")
       .update({ 
         status: "completed",
         vercel_url: url,
+        thumbnail_url: thumbnailUrl,
         updated_at: new Date().toISOString()
       })
       .eq("id", id);
 
-    // 5. Notificar usuário
+    // 6. Notificar usuário
     await sendTextMessage(
       siteRequest.user_phone,
       `✅ Site pronto!\n${url}`
     );
+    
+    // Enviar preview
+    await sendImageMessage(siteRequest.user_phone, thumbnailUrl);
 
     return NextResponse.json({ success: true });
+
   } catch (error: unknown) {
     const message =
       error instanceof Error

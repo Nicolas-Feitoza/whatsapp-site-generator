@@ -3,10 +3,10 @@ import { NextResponse } from 'next/server';
 
 // Configurações ajustáveis
 const CLEANUP_SETTINGS = {
-  expirationTime: 24 * 60 * 60 * 1000, // 24 hours
-  batchSize: 20, // Increased batch size
-  retryCount: 5, // Increased retry count
-  retryDelay: 3000 // 3s between retries
+  expirationTime: 48 * 60 * 60 * 1000, // 48 horas
+  batchSize: 20,
+  retryCount: 3,
+  retryDelay: 5000
 };
 
 export const config = {
@@ -18,13 +18,13 @@ export async function GET() {
     const now = Date.now();
     console.log(`[CLEANUP] 🧹 Iniciando limpeza em ${new Date(now).toISOString()}`);
 
-    // 1. Buscar requests elegíveis para limpeza
+    // Buscar apenas requests expirados
     const { data: requests, error: fetchError } = await supabase
       .from('requests')
       .select('id, project_id, updated_at, status, user_phone')
       .in('status', ['completed', 'failed'])
-      .not('project_id', 'is', null)
-      .order('updated_at', { ascending: true }) // Mais antigos primeiro
+      .lt('updated_at', new Date(Date.now() - CLEANUP_SETTINGS.expirationTime).toISOString())
+      .order('updated_at', { ascending: true })
       .limit(CLEANUP_SETTINGS.batchSize);
 
     if (fetchError) throw fetchError;

@@ -32,16 +32,12 @@ Regras estritas:
   const data = await res.json();
   let html = data?.choices?.[0]?.message?.content?.trim() ?? "";
 
-  // Verificações de estrutura
-  const hasDoctype = html.includes("<!DOCTYPE");
-  const hasHtml = html.includes("<html");
-  const hasHead = html.includes("<head");
-  const hasBody = html.includes("<body");
+  // Remover blocos de markdown se presentes
+  html = html.replace(/```html/g, '').replace(/```/g, '').trim();
 
-  // Reforçar estrutura mínima se necessário
-  if (!hasDoctype || !hasHtml || !hasHead || !hasBody) {
-    html = `
-<!DOCTYPE html>
+  // Garantir estrutura mínima
+  if (!html.includes('<html') || !html.includes('</body>')) {
+    html = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
@@ -49,12 +45,15 @@ Regras estritas:
   <title>${userPrompt}</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet" />
+  <style>body { opacity: 0; transition: opacity 0.3s; }</style>
 </head>
-<body class="bg-gray-50">
-  ${html}
+<body class="bg-gray-50 min-h-screen">
+  <main class="container mx-auto p-4">
+    ${html}
+  </main>
+  <script>document.addEventListener('DOMContentLoaded', () => setTimeout(() => { document.body.style.opacity = '1' }, 300))</script>
 </body>
-</html>
-    `.trim();
+</html>`;
   }
 
   return html;

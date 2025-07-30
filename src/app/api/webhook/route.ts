@@ -127,7 +127,6 @@ async function processSiteCreation(message: any, session: any) {
   const messageId = message.id;
 
   // 1. Verificar se já existe request para esta mensagem
-  console.log(`[WEBHOOK] Verificando se request já existe`);
   const existingRequest = await checkExistingRequest(messageId);
   if (existingRequest) {
     console.log('[WEBHOOK] 🔄 Mensagem já processada anteriormente');
@@ -135,7 +134,6 @@ async function processSiteCreation(message: any, session: any) {
   }
 
   // 2. Validação de prompt
-  console.log(`[WEBHOOK] Validando prompt`);
   const validation = validateSitePrompt(text);
   if (!validation.isValid) {
     if (!session.invalidsent) {
@@ -156,8 +154,7 @@ async function processSiteCreation(message: any, session: any) {
   }
 
   try {
-    // 3. Criar solicitação com tratamento de duplicidade
-    console.log(`[WEBHOOK] Criando e tratando request`);
+    // 3. Criar solicitação
     const request = await createSiteRequest({
       userPhone,
       text,
@@ -165,21 +162,19 @@ async function processSiteCreation(message: any, session: any) {
       action: session.action
     });
 
-    // 4. Atualizar sessão com upsert
-    console.log(`[WEBHOOK] Atualizando sessão`);
+    // 4. Atualizar sessão e enviar confirmação
     await updateSession(userPhone, {
       step: "processando",
       metadata: {
         lastPrompt: text,
         requestId: request.id
       }
-    }).catch(console.error);
+    });
 
-    await sendTextMessage(userPhone, "✅ Pedido recebido! Estamos gerando seu site...");
+    await sendTextMessage(userPhone, "⏳ Gerando seu site...");
 
-    // 5. Disparar deploy
-    console.log(`[WEBHOOK] Enviando para deploy`);
-    await triggerDeploy(request.id);
+    // 5. Disparar deploy em background
+    setTimeout(() => triggerDeploy(request.id), 1000);
 
     return NextResponse.json({ status: "processing" });
 

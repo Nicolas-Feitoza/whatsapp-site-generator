@@ -27,17 +27,40 @@ export const deployOnVercel = async (
     throw new Error(`Falha no deploy: ${error}`);
   }
 
-  return `https://${alias}.vercel.app`;
+  const data = await response.json();
+  const deploymentId = data.id;
+
+  // Aguardar deploy finalizar
+  await new Promise(resolve => setTimeout(resolve, 5000));
+  
+  // Obter URL real
+  const deploymentResponse = await fetch(`https://api.vercel.com/v13/deployments/${deploymentId}`, {
+    headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` }
+  });
+  
+  const deploymentData = await deploymentResponse.json();
+  return deploymentData.url || `https://${alias}.vercel.app`;
 };
 
 function ensureCompleteHtml(content: string): string {
-  return content.includes('<html') ? content : `<!DOCTYPE html>
+  if (content.includes('<html') && content.includes('</body>')) {
+    return content;
+  }
+
+  return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet">
+  <style>body { opacity: 0; transition: opacity 0.3s; }</style>
 </head>
-<body>${content}</body>
+<body class="bg-gray-50 min-h-screen">
+  <main class="container mx-auto p-4">
+    ${content}
+  </main>
+  <script>document.addEventListener('DOMContentLoaded', () => setTimeout(() => { document.body.style.opacity = '1' }, 300))</script>
+</body>
 </html>`;
 }
