@@ -1,62 +1,10 @@
 import fetch from 'node-fetch';
-import { assertValidTokenResponse } from './assertValidTokenResponse';
 
 const PHONE_ID = process.env.WHATSAPP_PHONE_ID;
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET = process.env.CLIENT_SECRET;
-
-let cachedToken: string | null = null;
-let tokenExpiry: number = 0;
-
-async function refreshAccessToken(): Promise<void> {
-  try {
-    const res = await fetch('https://graph.facebook.com/oauth/access_token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        grant_type: 'client_credentials',
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Token refresh failed: ${err}`);
-    }
-
-    const rawdata = await res.json();
-    const data = assertValidTokenResponse(rawdata);
-    cachedToken = data.access_token;
-    tokenExpiry = Date.now() + ((data.expires_in || 3600) * 1000);
-    console.log('[WHATSAPP] Token refreshed, expires at:', new Date(tokenExpiry));
-  } catch (error) {
-    console.error('[WHATSAPP] Token refresh error:', error);
-    cachedToken = null;
-    tokenExpiry = 0;
-    throw error;
-  }
-}
-
-async function getAccessToken(): Promise<string> {
-  // Use cached token if valid
-  if (cachedToken && Date.now() < tokenExpiry - 60000) {
-    return cachedToken;
-  }
-
-  // Fallback to env token if refresh fails
-  try {
-    await refreshAccessToken();
-    return cachedToken!;
-  } catch (error) {
-    console.error('[WHATSAPP] Using fallback token');
-    return process.env.WHATSAPP_TOKEN || "";
-  }
-}
 
 export const sendTextMessage = async (to: string, text: string) => {
+  console.log(`[WHATSAPP] Enviando mensagem: ${text} para ${to}`);
   try {
-    const token = await getAccessToken();
     const response = await fetch(
       `https://graph.facebook.com/v17.0/${PHONE_ID}/messages`,
       {
@@ -88,11 +36,11 @@ export const sendTextMessage = async (to: string, text: string) => {
 }
 
 export const sendImageMessage = async (to: string, imageUrl: string) => {
+  console.log(`[WHATSAPP] Enviando imagem: link=${imageUrl} para ${to}`);
   if (!imageUrl.startsWith('http') || imageUrl.includes('localhost')) {
     imageUrl = 'https://via.placeholder.com/1280x720.png?text=Site+Preview';
   }
   try {
-    const token = await getAccessToken();
     const response = await fetch(
       `https://graph.facebook.com/v17.0/${PHONE_ID}/messages`,
       {
@@ -127,8 +75,8 @@ export const sendActionButtons = async (
   to: string,
   ids: ("gerar_site" | "editar_site" | "sair")[] = ["gerar_site", "editar_site"]
 ) => {
+  console.log(`[WHATSAPP] Enviando botões: ${ids} para ${to}`);
   try {
-    const token = await getAccessToken();
     const titles: Record<string, string> = {
       gerar_site: "Gerar site",
       editar_site: "Editar site",

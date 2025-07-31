@@ -47,6 +47,7 @@ const THUMBNAIL_CONFIG = {
 };
 
 export async function captureThumbnail(url: string): Promise<string> {
+  console.log(`[THUMBNAILS] Verificando se o deploy está pronto`);
   let attempts = 0;
   while (attempts < 5) {
     if (await isDeploymentReady(url)) break;
@@ -59,6 +60,7 @@ export async function captureThumbnail(url: string): Promise<string> {
   }
 
   for (const service of THUMBNAIL_CONFIG.services) {
+    console.log(`[THUMBNAIL] Tentando capturar com ${service.name}`);
     try {
       const imageUrl = await tryCaptureWithService(url, service);
       if (imageUrl) {
@@ -124,6 +126,7 @@ async function tryCaptureWithService(url: string, service: any): Promise<string>
 }
 
 async function uploadToSupabase(blob: Blob, originalUrl: string): Promise<string> {
+  console.log(`[THUMBNAILS] Enviando imagem para o supabase`);
   const urlHash = createHash('sha256').update(originalUrl).digest('hex');
   const fileName = `public/thumbnails/${urlHash}.jpg`;
   const arrayBuffer = await blob.arrayBuffer();

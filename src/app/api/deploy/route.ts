@@ -31,6 +31,7 @@ export async function POST(request: Request) {
   
   try {
     // 1. Buscar request no Supabase
+    console.log(`[DEPLOY] Buscando solicitação no banco`);
     const { data: siteRequest } = await supabase
       .from("requests")
       .select("*")
@@ -40,12 +41,20 @@ export async function POST(request: Request) {
     if (!siteRequest) throw new Error("Request não encontrado");
 
     // 2. Gerar template
-    const template = await generateTemplate(siteRequest.prompt);
+    console.log(`[DEPLOY] Gerando template`);
+    const template = await withRetry(
+      async () => generateTemplate(siteRequest.prompt),
+      DEPLOYMENT_TIMEOUTS.maxRetries,
+      DEPLOYMENT_TIMEOUTS.retryDelay,
+      "Template Generation"
+    );
 
     // 3. Fazer deploy
+    console.log(`[DEPLOY] Enviando para Vercel`);
     const url = await deployOnVercel(template, siteRequest.user_phone);
 
     // 4. Capturar thumbnail (aguardar 15s)
+    console.log(`[DEPLOY] Capturando thumbnail`);
     let thumbnailUrl = 'https://via.placeholder.com/1280x720.png?text=Site+Preview';
     try {
       await new Promise(resolve => setTimeout(resolve, 15000));
@@ -55,6 +64,7 @@ export async function POST(request: Request) {
     }
 
     // 5. Atualizar status
+    console.log(`[DEPLOY] Atualizando banco`);
     await supabase
       .from("requests")
       .update({ 
@@ -66,12 +76,14 @@ export async function POST(request: Request) {
       .eq("id", id);
 
     // 6. Notificar usuário
+    console.log(`[DEPLOY] Notificando usuário`);
     await sendTextMessage(
       siteRequest.user_phone,
       `✅ Site pronto!\n${url}`
     );
     
     // Enviar preview
+    console.log(`[DEPLOY] Enviando preview`);
     await sendImageMessage(siteRequest.user_phone, thumbnailUrl);
 
     return NextResponse.json({ success: true });

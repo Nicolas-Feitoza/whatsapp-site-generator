@@ -31,6 +31,7 @@ export interface SessionData {
 }
 
 export async function getSession(userPhone: string): Promise<SessionData> {
+  console.log(`[SESSIONS] Consultando sessão`);
   const { data, error } = await supabase
     .from("sessions")
     .select("*")
@@ -55,6 +56,7 @@ export async function updateSession(
   userPhone: string,
   updates: Partial<SessionData>
 ): Promise<void> {
+  console.log(`[SESSIONS] Atualizando sessão`);
   try {
     const { error } = await supabase
       .from("sessions")
@@ -74,6 +76,7 @@ export async function updateSession(
 }
 
 export async function clearSession(userPhone: string): Promise<void> {
+  console.log(`[SESSIONS] Limpando sessão`);
   const { error } = await supabase
     .from("sessions")
     .delete()
@@ -89,6 +92,7 @@ export function validateTransition(
   current: SessionStep,
   next: SessionStep
 ): boolean {
+  console.log(`[SESSIONS] Validando transição de sessão`);
   const validTransitions: Record<SessionStep, SessionStep[]> = {
     start: ["aguardando_prompt"],
     aguardando_prompt: ["validando_prompt", "start"],

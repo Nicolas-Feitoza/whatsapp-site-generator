@@ -1,4 +1,5 @@
 export const generateTemplate = async (userPrompt: string): Promise<string> => {
+  console.log(`[AICLIENT] Gerando template para: ${userPrompt}`);
   const systemPrompt = `
 Você é um gerador de sites profissionais. Retorne APENAS o HTML completo com:
 1. Tailwind CSS via CDN

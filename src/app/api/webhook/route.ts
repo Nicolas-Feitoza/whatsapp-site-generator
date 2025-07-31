@@ -65,7 +65,7 @@ export async function POST(request: Request) {
     const currentSession = await getSession(userPhone);
 
     // Processamento condicional baseado no estado
-    if (currentSession.step === "aguardando_prompt" && message.type === "text") {
+    if (currentSession.step === "aguardando_prompt" && currentSession.action && message.type === "text") {
       console.log(`[WEBHOOK] Iniciando processo de criação do site`);
       return await processSiteCreation(message, currentSession);
     }
@@ -174,7 +174,7 @@ async function processSiteCreation(message: any, session: any) {
     await sendTextMessage(userPhone, "⏳ Gerando seu site...");
 
     // 5. Disparar deploy em background
-    setTimeout(() => triggerDeploy(request.id), 1000);
+    await triggerDeploy(request.id);
 
     return NextResponse.json({ status: "processing" });
 
