@@ -86,17 +86,19 @@ export async function clearSession(userPhone: string): Promise<void> {
 }
 
 export function validateTransition(
-    current: SessionStep,
-    next: SessionStep
-  ): boolean {
-    const validTransitions: Record<SessionStep, SessionStep[]> = {
-      start: ["aguardando_prompt"],
-      aguardando_prompt: ["validando_prompt", "start"],
-      validando_prompt: ["processando", "aguardando_prompt"],
-      processando: ["completo", "erro"],
-      completo: ["start"],
-      erro: ["start", "aguardando_prompt"]
-    };
-  
-    return validTransitions[current].includes(next);
-  }
+  current: SessionStep,
+  next: SessionStep
+): boolean {
+  const validTransitions: Record<SessionStep, SessionStep[]> = {
+    start: ["aguardando_prompt"],
+    aguardando_prompt: ["validando_prompt", "start"],
+    validando_prompt: ["processando", "aguardando_prompt"],
+    processando: ["completo", "erro"],
+    completo: ["start", "aguardando_prompt"],
+    erro: ["start", "aguardando_prompt"]
+  };
+
+  // Adicionar verificação explícita
+  if (!validTransitions[current]) return false;
+  return validTransitions[current].includes(next);
+}

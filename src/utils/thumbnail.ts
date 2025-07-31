@@ -1,6 +1,22 @@
 import { supabase } from "./supabase";
 import { createHash } from 'crypto';
 
+async function isDeploymentReady(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 sec timeout
+
+  try {
+    const response = await fetch(url, { 
+      method: 'GET',
+      signal: controller.signal 
+    });
+    clearTimeout(timeoutId);
+    return response.status === 200;
+  } catch {
+    return false;
+  }
+}
+
 const THUMBNAIL_CONFIG = {
   services: [
     {
@@ -31,6 +47,12 @@ const THUMBNAIL_CONFIG = {
 };
 
 export async function captureThumbnail(url: string): Promise<string> {
+  let attempts = 0;
+  while (attempts < 5) {
+    if (await isDeploymentReady(url)) break;
+    await new Promise(r => setTimeout(r, 5000));
+    attempts++;
+  }
   // Verificar se a URL é válida
   if (!url || !url.startsWith('http')) {
     return THUMBNAIL_CONFIG.placeholderUrl;

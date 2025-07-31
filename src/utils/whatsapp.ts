@@ -88,6 +88,9 @@ export const sendTextMessage = async (to: string, text: string) => {
 }
 
 export const sendImageMessage = async (to: string, imageUrl: string) => {
+  if (!imageUrl.startsWith('http') || imageUrl.includes('localhost')) {
+    imageUrl = 'https://via.placeholder.com/1280x720.png?text=Site+Preview';
+  }
   try {
     const token = await getAccessToken();
     const response = await fetch(

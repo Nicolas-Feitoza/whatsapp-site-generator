@@ -6,6 +6,9 @@ export const deployOnVercel = async (
 ): Promise<string> => {
   const alias = `site-${userPhone.replace(/\D/g, '').slice(-8)}-${Date.now().toString(36)}`;
   
+  // Adicionar ?public=true para garantir acesso público
+  const publicUrl = `https://${alias}.vercel.app?public=true`;
+
   const response = await fetch("https://api.vercel.com/v13/deployments", {
     method: "POST",
     headers: {
@@ -15,10 +18,10 @@ export const deployOnVercel = async (
     body: JSON.stringify({
       name: `site-${Date.now()}`,
       target: "production",
-      public: true,
+      public: true, // Garantir projeto público
       files: [{ file: "/index.html", data: ensureCompleteHtml(htmlContent) }],
       builds: [{ src: "index.html", use: "@vercel/static" }],
-      alias: `${alias}.vercel.app`
+      alias: publicUrl // Usar URL pública
     }),
   });
 
@@ -39,7 +42,7 @@ export const deployOnVercel = async (
   });
   
   const deploymentData = await deploymentResponse.json();
-  return deploymentData.url || `https://${alias}.vercel.app`;
+  return publicUrl;
 };
 
 function ensureCompleteHtml(content: string): string {
